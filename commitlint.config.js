@@ -31,7 +31,7 @@ module.exports = {
     // Subject must be <= 100 chars so it fits in the changelog.
     'header-max-length': [2, 'always', 100],
     // Subject must not end with a period \u2014 conventional-commits style.
-    'header-end-with-period': [2, 'never', '.'],
+    'header-full-stop': [2, 'never', '.'],
     // Type + scope + colon must be lowercase: feat(rpc): ...
     'type-case': [2, 'always', 'lower-case'],
     'scope-case': [2, 'always', 'lower-case'],

@@ -198,12 +198,12 @@ def validate_create_object(payload: dict[str, Any]) -> CreateObjectRequest:
     (typically ``safe_operation``-wrapped tool) formats the error for
     the LLM.
     """
-    return CreateObjectRequest.model_validate(payload)
+    return CreateObjectRequest.model_validate(payload)  # type: ignore[no-any-return]
 
 
 def validate_edit_object(payload: dict[str, Any]) -> EditObjectRequest:
     """Validate the legacy ``edit_object`` payload and return a model."""
-    return EditObjectRequest.model_validate(payload)
+    return EditObjectRequest.model_validate(payload)  # type: ignore[no-any-return]
 
 
 __all__ = [

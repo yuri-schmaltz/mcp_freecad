@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1](https://github.com/yuri-schmaltz/mcp_freecad/compare/v1.0.0...1.0.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **ci:** repair commitlint config and mypy no-any-return ([f321edf](https://github.com/yuri-schmaltz/mcp_freecad/commit/f321edf67e833535aa78272bcbb2ba31909cd98c))
+* **deps:** cap mcp&lt;2 to prevent mcp 2.x install breakage ([ec64d68](https://github.com/yuri-schmaltz/mcp_freecad/commit/ec64d680484dcaa70cd4ef23d23ad5e02d97c8da))
+
+
+### Tests
+
+* skip POSIX-only tests on Windows + relax connect-refused bound ([8858e91](https://github.com/yuri-schmaltz/mcp_freecad/commit/8858e910bd01e003675c6c54847bf17ed4232755))
+
+
+### Build System
+
+* **ci:** add packages wrapper to release-please v17 config ([4e51d8c](https://github.com/yuri-schmaltz/mcp_freecad/commit/4e51d8c255d2daeab9133ba5d1c84b002bb0f4af))
+
 ## [Unreleased]
 
 ### Added

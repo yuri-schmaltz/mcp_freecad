@@ -1,8 +1,19 @@
 # Plano de Melhorias, Correção de Bugs e Robustecimento — mcp-freecad
 
-> Documento vivo. Atualizar à medida que itens forem tratados.
-> Versão da análise: baseada no commit `2c48d3e` (HEAD de `main`).
-> Versão do projeto: `0.1.18`.
+> **Histórico.** Esta auditoria foi feita em v0.1.18 (commit `2c48d3e`,
+> 2026-05). Desde então o projeto evoluiu para **v1.0.0** (cut oficial
+> 2026-07-15). As Fases 1–6 e todos os quick wins listados aqui foram
+> entregues nas releases 0.2.0 / 0.3.0 / 1.0.0 — ver `CHANGELOG.md` para
+> o estado atual. **P5.9 (async RPC) permanece intencionalmente
+> *won't fix***: o RPC server roda na GUI thread do FreeCAD e a troca
+> para asyncio exigiria reescrever o ciclo de eventos do workbench.
+>
+> Para novas auditorias, abrir um doc novo
+> (`docs/AUDIT_<data>.md`) em vez de editar este.
+>
+> ---
+>
+> (Conteúdo original preservado abaixo para referência.)
 
 ---
 

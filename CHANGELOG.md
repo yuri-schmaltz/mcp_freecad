@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    will keep reading and writing to that directory until you
    delete it. New installs create `~/.config/mcp-freecad/`.
 
-## [0.4.0] — 2026-XX-XX
+## [0.4.0] — 2026-07-10
 
 **Theme: from demo to product.** Every Tier 1 (security & reliability
 blocker) and Tier 2 (production-grade) item from
@@ -194,7 +194,7 @@ blocker) and Tier 2 (production-grade) item from
   "enable then realise and add TLS later" flow must set the env
   vars first.
 
-## [0.3.0] — 2025-XX-XX
+## [0.3.0] — 2026-07-02
 
 ### Added
 - **TLS support for the XML-RPC server**: set `FREECAD_MCP_TLS_CERT`
@@ -221,7 +221,7 @@ blocker) and Tier 2 (production-grade) item from
   bearer-token matching, case-insensitive header, hmac constant-time,
   Pillow transcoding for JPEG and WebP, compression threshold.
 
-## [0.2.0] — 2025-XX-XX
+## [0.2.0] — 2026-07-02
 
 ### Added
 
@@ -329,6 +329,6 @@ blocker) and Tier 2 (production-grade) item from
 - `README.md` and `pyproject.toml` updated to reflect the new
   features, env vars, and tooling.
 
-## [0.1.18] — 2024-??-??
+## [0.1.18] — 2026-07-02
 
 Initial public release. See git history for the full pre-0.2.0 lineage.

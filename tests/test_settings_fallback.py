@@ -149,6 +149,13 @@ def test_resolve_uses_freecad_dir_when_writable():
 
 def test_resolve_falls_back_to_home_when_freecad_unwritable():
     """If the FreeCAD user dir is read-only, we fall back to HOME/.config."""
+    import sys
+    if sys.platform == "win32":
+        # /proc/1 is a POSIX construct; on Windows we have no equivalent
+        # path that's guaranteed to be unwritable. The skip matches the
+        # pattern already used in test_resolve_uses_legacy_dir_when_present.
+        import pytest
+        pytest.skip("POSIX-only test: uses /proc/1 as the unwritable path")
     rpc_mod = _load_rpc_server()
     home = tempfile.mkdtemp(prefix="home_for_fb_")
     restore = _with_env({"HOME": home, "XDG_CONFIG_HOME": ""})
@@ -168,6 +175,10 @@ def test_resolve_falls_back_to_home_when_freecad_unwritable():
 
 
 def test_resolve_xdg_takes_priority_over_home():
+    import sys
+    if sys.platform == "win32":
+        import pytest
+        pytest.skip("POSIX-only test: uses /proc/1 as the unwritable path")
     rpc_mod = _load_rpc_server()
     xdg = tempfile.mkdtemp(prefix="xdg_for_fb_")
     home = tempfile.mkdtemp(prefix="home_for_xdg_")
@@ -185,6 +196,10 @@ def test_resolve_xdg_takes_priority_over_home():
 
 
 def test_resolve_falls_back_to_temp_when_nothing_writable():
+    import sys
+    if sys.platform == "win32":
+        import pytest
+        pytest.skip("POSIX-only test: uses /proc/1 as the unwritable path")
     rpc_mod = _load_rpc_server()
     # HOME and XDG point at unwritable locations; only /tmp is left.
     restore = _with_env({"XDG_CONFIG_HOME": "/proc/1/xdg_unwritable", "HOME": "/proc/1/home_unwritable"})

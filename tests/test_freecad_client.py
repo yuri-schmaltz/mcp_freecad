@@ -118,6 +118,11 @@ def test_connection_to_unresponsive_peer_times_out():
 def test_connection_to_closed_port_fails_fast():
     """Connecting to a port with no listener should raise immediately,
     not hang for the OS default (~tens of seconds).
+
+    The 4s ceiling is generous: on Linux/macOS a refused connect
+    typically returns in <0.1s, on Windows the Winsock stack takes
+    ~2.5-3s because the OS retries the connection before giving up.
+    The 4s bound is still tight against the OS default of 75-120s.
     """
     port = _free_port()  # we never listen on it
     proxy = fc._build_server_proxy("127.0.0.1", port, timeout=1.0)
@@ -126,7 +131,7 @@ def test_connection_to_closed_port_fails_fast():
         proxy.ping()
     except (ConnectionRefusedError, OSError) as e:
         elapsed = time.time() - t0
-        assert elapsed < 2.0, f"connection refused took {elapsed:.2f}s, expected < 2s"
+        assert elapsed < 4.0, f"connection refused took {elapsed:.2f}s, expected < 4s"
         print(f"  refused call raised {type(e).__name__} after {elapsed:.2f}s")
     else:
         raise AssertionError("expected ConnectionRefusedError")

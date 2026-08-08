@@ -138,7 +138,7 @@ jobs:
       - name: Install ruff
         run: python -m pip install ruff
       - name: Lint
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ addon/
 
   types:
     name: mypy

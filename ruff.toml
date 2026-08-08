@@ -19,6 +19,21 @@ ignore = [
 "tests/*" = ["E402", "B011", "B007", "SIM", "I001"]
 # The FreeCAD addon imports the heavy FreeCAD modules at top level.
 "addon/FreeCADMCP/rpc_server/rpc_server.py" = ["E402", "B007"]
+# InitGui.py is loaded by the FreeCAD runtime which injects `Workbench`,
+# `Gui`, and `FreeCAD` as module-level globals before our code runs.
+# Ruff can't see those globals (they come from C++ bindings), so the
+# usual "import at top" rule doesn't apply: the late `from PySide import
+# QtCore` is intentional (must come after the workbench class is
+# declared) and `FreeCAD.Console.*` is a runtime-injected call.
+"addon/FreeCADMCP/InitGui.py" = ["E402", "F821"]
+# The remaining addon/ files use `from typing import List, Dict, ...`
+# for Python 3.9+ compat. Migrating to built-in generics is a separate
+# cleanup (tracked in IMPROVEMENT_PLAN.md) — the deprecation warnings
+# are noise today, not blockers.
+"addon/FreeCADMCP/rpc_server/parts_library.py" = ["UP035"]
+"addon/FreeCADMCP/rpc_server/_request_tracking.py" = ["UP035"]
+"addon/FreeCADMCP/rpc_server/_fem_workdir.py" = ["UP035"]
+"addon/FreeCADMCP/rpc_server/_security_gate.py" = ["UP035"]
 
 [format]
 quote-style = "double"

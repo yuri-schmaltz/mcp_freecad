@@ -12,7 +12,6 @@ import os
 import shutil
 from typing import Callable
 
-
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 

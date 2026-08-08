@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import collections
 import threading
-from typing import Any, Callable, Deque, Dict, Optional, Tuple
+from typing import Any
 
 
 class RequestTracker:
@@ -30,20 +30,20 @@ class RequestTracker:
 
     def __init__(self, max_cached: int = 256) -> None:
         self._max_cached = max(1, int(max_cached))
-        self._completed: Dict[str, Any] = {}
-        self._completed_order: Deque[str] = collections.deque()
+        self._completed: dict[str, Any] = {}
+        self._completed_order: collections.deque[str] = collections.deque()
         self._cancelled: set[str] = set()
         self._lock = threading.RLock()
 
     # --- idempotency -----------------------------------------------------
 
-    def get_cached(self, request_id: Optional[str]) -> Optional[Any]:
+    def get_cached(self, request_id: str | None) -> Any | None:
         if request_id is None:
             return None
         with self._lock:
             return self._completed.get(request_id)
 
-    def cache_response(self, request_id: Optional[str], response: Any) -> None:
+    def cache_response(self, request_id: str | None, response: Any) -> None:
         if request_id is None:
             return
         with self._lock:
@@ -72,13 +72,13 @@ class RequestTracker:
             self._cancelled.add(request_id)
             return True
 
-    def is_cancelled(self, request_id: Optional[str]) -> bool:
+    def is_cancelled(self, request_id: str | None) -> bool:
         if request_id is None:
             return False
         with self._lock:
             return request_id in self._cancelled
 
-    def consume_cancel(self, request_id: Optional[str]) -> bool:
+    def consume_cancel(self, request_id: str | None) -> bool:
         """Return and clear the cancelled flag for *request_id*."""
         if request_id is None:
             return False
@@ -90,11 +90,11 @@ class RequestTracker:
 
     # --- introspection ---------------------------------------------------
 
-    def cached_ids(self) -> Tuple[str, ...]:
+    def cached_ids(self) -> tuple[str, ...]:
         with self._lock:
             return tuple(self._completed_order)
 
-    def pending_cancellations(self) -> Tuple[str, ...]:
+    def pending_cancellations(self) -> tuple[str, ...]:
         with self._lock:
             return tuple(self._cancelled)
 
@@ -107,7 +107,7 @@ class RequestTracker:
 
 # A default singleton for the running RPC server. Tests construct their
 # own instance via the constructor above.
-_tracker: Optional[RequestTracker] = None
+_tracker: RequestTracker | None = None
 _tracker_lock = threading.Lock()
 
 

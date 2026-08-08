@@ -260,10 +260,8 @@ class FilteredXMLRPCServer(SimpleXMLRPCServer, _BearerAuthHandler):
                     FreeCAD.Console.PrintWarning(
                         f"MCP RPC: TLS handshake from {addr} failed: {type(e).__name__}: {e}\n"
                     )
-                try:
+                with contextlib.suppress(Exception):
                     sock.close()
-                except Exception:
-                    pass
                 # Re-raise so SimpleXMLRPCServer drops the connection.
                 raise
         return sock, addr
@@ -306,10 +304,7 @@ class FilteredXMLRPCServer(SimpleXMLRPCServer, _BearerAuthHandler):
     def _read_request_headers_for_auth(self) -> str:
         """Read the request line + headers off the raw socket."""
         raw = getattr(self, "raw_requestline", b"")
-        if isinstance(raw, bytes) and raw:
-            first = raw.decode("iso-8859-1", errors="replace")
-        else:
-            first = ""
+        first = raw.decode("iso-8859-1", errors="replace") if isinstance(raw, bytes) and raw else ""
         try:
             sock = self.request
             if hasattr(sock, "makefile"):
@@ -912,12 +907,11 @@ class FreeCADRPC:
                     if callable(make_method):
                         res = make_method(doc, obj.name)
                         prop_errors = set_object_property(doc, res, obj.properties)
-                        if prop_errors:
-                            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-                                FreeCAD.Console.PrintWarning(
-                                    f"FEM object '{res.Name}' created with {len(prop_errors)} property warning(s): "
-                                    f"{prop_errors}\n"
-                                )
+                        if prop_errors and FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                            FreeCAD.Console.PrintWarning(
+                                f"FEM object '{res.Name}' created with {len(prop_errors)} property warning(s): "
+                                f"{prop_errors}\n"
+                            )
                         if FreeCAD is not None and hasattr(FreeCAD, "Console"):
                             FreeCAD.Console.PrintMessage(
                                 f"FEM object '{res.Name}' created with '{method_name}'.\n"
@@ -929,12 +923,11 @@ class FreeCADRPC:
                 else:
                     res = doc.addObject(obj.type, obj.name)
                     prop_errors = set_object_property(doc, res, obj.properties)
-                    if prop_errors:
-                        if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-                            FreeCAD.Console.PrintWarning(
-                                f"Object '{res.Name}' created with {len(prop_errors)} property warning(s): "
-                                f"{prop_errors}\n"
-                            )
+                    if prop_errors and FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                        FreeCAD.Console.PrintWarning(
+                            f"Object '{res.Name}' created with {len(prop_errors)} property warning(s): "
+                            f"{prop_errors}\n"
+                        )
                     if FreeCAD is not None and hasattr(FreeCAD, "Console"):
                         FreeCAD.Console.PrintMessage(
                             f"{res.TypeId} '{res.Name}' added to '{doc_name}' via RPC.\n"
@@ -978,12 +971,11 @@ class FreeCADRPC:
                     )
                 del obj.properties["References"]
             prop_errors = set_object_property(doc, obj_ins, obj.properties)
-            if prop_errors:
-                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-                    FreeCAD.Console.PrintWarning(
-                        f"Object '{obj.name}' edited with {len(prop_errors)} property warning(s): "
-                        f"{prop_errors}\n"
-                    )
+            if prop_errors and FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintWarning(
+                    f"Object '{obj.name}' edited with {len(prop_errors)} property warning(s): "
+                    f"{prop_errors}\n"
+                )
             doc.recompute()
             if FreeCAD is not None and hasattr(FreeCAD, "Console"):
                 FreeCAD.Console.PrintMessage(f"Object '{obj.name}' updated via RPC.\n")

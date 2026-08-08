@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 
 try:
@@ -110,8 +109,8 @@ def serialize_object(obj):
         except Exception as e:
             result["Properties"][prop] = f"<error: {str(e)}>"
 
-    if hasattr(obj, "ViewObject") and getattr(obj, "ViewObject") is not None:
-        view = getattr(obj, "ViewObject")
+    if hasattr(obj, "ViewObject") and obj.ViewObject is not None:
+        view = obj.ViewObject
         result["ViewObject"] = serialize_view_object(view)
 
     return result

@@ -1,5 +1,4 @@
 import os
-from typing import List, Tuple
 
 import FreeCAD
 import FreeCADGui
@@ -57,7 +56,7 @@ def insert_part_from_library(relative_path):
 # - Returning a defensive copy of the cached list prevents callers from
 #   mutating the cache in place.
 
-_parts_list_cache: dict[str, Tuple[Tuple[float, int], List[str]]] = {}
+_parts_list_cache: dict[str, tuple[tuple[float, int], list[str]]] = {}
 
 
 def _safe_mtime(path: str) -> float:
@@ -68,9 +67,9 @@ def _safe_mtime(path: str) -> float:
         return 0.0
 
 
-def _walk_parts(parts_lib_path: str) -> Tuple[Tuple[float, int], List[str]]:
+def _walk_parts(parts_lib_path: str) -> tuple[tuple[float, int], list[str]]:
     """Walk *parts_lib_path* and return ``((latest_mtime, count), relative_paths)``."""
-    parts: List[str] = []
+    parts: list[str] = []
     latest = _safe_mtime(parts_lib_path)
     for root, _dirs, files in os.walk(parts_lib_path):
         for file in files:
@@ -85,7 +84,7 @@ def _walk_parts(parts_lib_path: str) -> Tuple[Tuple[float, int], List[str]]:
     return (latest, len(parts)), parts
 
 
-def get_parts_list() -> List[str]:
+def get_parts_list() -> list[str]:
     """Return a sorted list of relative paths to ``.FCStd`` files under the parts library.
 
     The result is cached per root path and invalidated automatically when

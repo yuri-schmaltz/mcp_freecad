@@ -1,5 +1,5 @@
-[![Tests](https://img.shields.io/badge/tests-401_passed-brightgreen)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-65%25-yellow)](tests/)
+[![Tests](https://img.shields.io/badge/tests-612_passed-brightgreen)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen)](tests/)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-1.12.2%2B-purple)](https://modelcontextprotocol.io)
@@ -13,7 +13,7 @@
 > screenshots, and manage the parts library — all through typed,
 > validated tool calls.
 
-**Status:** v1.0.3 — hardening + observability pass. 401 tests, 65 % coverage, ruff & mypy clean.
+**Status:** v1.0.3 — hardening + observability pass. 612 tests, 87 % coverage, ruff & mypy clean.
 **Origin:** originated as a fork of [neka-nat/freecad-mcp](https://github.com/neka-nat/freecad-mcp);
 now an independent project under active development.
 

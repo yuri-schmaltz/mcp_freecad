@@ -25,6 +25,8 @@ import tempfile
 import types
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve().parent
 _RS_DIR = _HERE.parent / "addon" / "FreeCADMCP" / "rpc_server"
 
@@ -150,6 +152,19 @@ spec.loader.exec_module(rpc_server)  # type: ignore[union-attr]
 def _reset_tracker():
     rt = sys.modules[f"{_pkg_name}._request_tracking"]
     rt.reset_default_tracker()
+
+
+@pytest.fixture(autouse=True)
+def _restore_active_document():
+    """Re-apply our fake ActiveDocument before every test.
+
+    Other test files (e.g. test_rpc_server_object_gui.py) overwrite
+    ``FreeCADGui.ActiveDocument`` at module-import time, leaving the
+    screenshot tests with a saveImage that doesn't write a PNG.
+    """
+    sys.modules["FreeCADGui"].ActiveDocument = _FakeActiveDoc()
+    yield
+    # No teardown needed — the next test will re-apply.
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +390,156 @@ def test_get_active_screenshot_jpeg_pillow_missing_returns_none():
         _ss.transcode_to_format = saved_func
         rpc_server.transcode_to_format = saved_func
         pump.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# execute_code
+# ---------------------------------------------------------------------------
+
+
+def test_execute_code_success_captures_stdout():
+    """execute_code runs the code, captures stdout, and returns success."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    try:
+        out = rpc.execute_code("print('hello world')")
+        assert out["success"] is True
+        assert "hello world" in out["message"]
+    finally:
+        pump.shutdown()
+
+
+def test_execute_code_failure_returns_error():
+    """execute_code returns an error dict when the code raises."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    try:
+        out = rpc.execute_code("raise RuntimeError('boom')")
+        assert out["success"] is False
+        assert "boom" in out["error"]
+    finally:
+        pump.shutdown()
+
+
+def test_execute_code_failure_includes_partial_stdout():
+    """When code raises mid-way, stdout captured before the error is
+    returned in the error envelope."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    try:
+        out = rpc.execute_code("print('part1'); raise ValueError('boom'); print('part2')")
+        assert out["success"] is False
+        assert "part1" in out.get("output", "")
+        # part2 should NOT be captured (exec stops at the exception).
+        assert "part2" not in out.get("output", "")
+    finally:
+        pump.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# get_objects / get_object / get_object returns
+# ---------------------------------------------------------------------------
+
+
+class _FakeObj:
+    def __init__(self, name):
+        self.Name = name
+        self.Label = name
+        self.TypeId = "Part::Box"
+
+
+class _FakeDoc:
+    def __init__(self, objects):
+        self._objects = {o.Name: o for o in objects}
+        self.Objects = list(objects)
+
+    def getObject(self, name):
+        return self._objects.get(name)
+
+
+def test_get_objects_returns_serialised_list():
+    """get_objects returns the list of serialised objects."""
+    doc = _FakeDoc([_FakeObj("A"), _FakeObj("B")])
+    saved_get_doc = sys.modules["FreeCAD"].getDocument
+    sys.modules["FreeCAD"].getDocument = lambda name: doc
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        out = rpc.get_objects("Doc1")
+        assert isinstance(out, list)
+        # 2 serialised objects (their shape depends on the serializer).
+        assert len(out) == 2
+    finally:
+        sys.modules["FreeCAD"].getDocument = saved_get_doc
+
+
+def test_get_objects_missing_doc_returns_empty_list():
+    saved_get_doc = sys.modules["FreeCAD"].getDocument
+    sys.modules["FreeCAD"].getDocument = lambda name: None
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        assert rpc.get_objects("Nope") == []
+    finally:
+        sys.modules["FreeCAD"].getDocument = saved_get_doc
+
+
+def test_get_object_returns_serialised_object():
+    doc = _FakeDoc([_FakeObj("Box")])
+    saved_get_doc = sys.modules["FreeCAD"].getDocument
+    sys.modules["FreeCAD"].getDocument = lambda name: doc
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        out = rpc.get_object("Doc1", "Box")
+        assert out is not None
+    finally:
+        sys.modules["FreeCAD"].getDocument = saved_get_doc
+
+
+def test_get_object_unknown_object_returns_none():
+    doc = _FakeDoc([_FakeObj("Box")])
+    saved_get_doc = sys.modules["FreeCAD"].getDocument
+    sys.modules["FreeCAD"].getDocument = lambda name: doc
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        assert rpc.get_object("Doc1", "Nope") is None
+    finally:
+        sys.modules["FreeCAD"].getDocument = saved_get_doc
+
+
+def test_get_object_missing_doc_returns_none():
+    saved_get_doc = sys.modules["FreeCAD"].getDocument
+    sys.modules["FreeCAD"].getDocument = lambda name: None
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        assert rpc.get_object("Nope", "Box") is None
+    finally:
+        sys.modules["FreeCAD"].getDocument = saved_get_doc
+
+
+def test_list_documents_returns_keys():
+    """list_documents returns the keys of FreeCAD.listDocuments()."""
+    saved_list = sys.modules["FreeCAD"].listDocuments
+    sys.modules["FreeCAD"].listDocuments = lambda: {"Doc1": 1, "Doc2": 2}
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        out = rpc.list_documents()
+        assert set(out) == {"Doc1", "Doc2"}
+    finally:
+        sys.modules["FreeCAD"].listDocuments = saved_list
+
+
+def test_get_parts_list_returns_list():
+    """get_parts_list delegates to parts_library.get_parts_list."""
+    saved_gpl = rpc_server.get_parts_list
+    rpc_server.get_parts_list = lambda: ["a", "b"]
+    try:
+        rpc = rpc_server.FreeCADRPC()
+        out = rpc.get_parts_list()
+        assert out == ["a", "b"]
+    finally:
+        rpc_server.get_parts_list = saved_gpl
 
 
 def test_timeout_for_ignores_zero_and_negative_override():

@@ -254,6 +254,79 @@ def test_tls_bad_cert_path_disables_tls():
     server.server_close()
 
 
+# ---------------------------------------------------------------------------
+# FilteredXMLRPCServer construction with bad allowed_ips
+# ---------------------------------------------------------------------------
+
+
+def test_filtered_server_warns_on_invalid_allowed_ips():
+    """When the allowlist contains invalid entries, the server emits a
+    console warning and skips them."""
+    import sys
+    rpc_mod = _load_rpc_server()
+
+    warnings: list[str] = []
+    sys.modules["FreeCAD"].Console.PrintWarning = lambda msg: warnings.append(msg)
+
+    try:
+        server = rpc_mod.FilteredXMLRPCServer(
+            ("127.0.0.1", 19998),  # nosec — test only
+            allowed_ips_str="127.0.0.1, not_an_ip, 10.0.0.0/8",
+        )
+        # Two warnings (one per bad entry).
+        assert any("not_an_ip" in w or "skipping" in w for w in warnings)
+        # Only the valid entries ended up in _allowed_networks.
+        assert len(server._allowed_networks) == 2
+        server.server_close()
+    finally:
+        sys.modules["FreeCAD"].Console.PrintWarning = lambda *a, **k: None
+
+
+def test_verify_request_allows_in_network():
+    """verify_request returns True for IPs inside an allowed CIDR."""
+    rpc_mod = _load_rpc_server()
+    server = rpc_mod.FilteredXMLRPCServer(
+        ("127.0.0.1", 19997),  # nosec — test only
+        allowed_ips_str="10.0.0.0/24",
+    )
+    try:
+        # Mock request, only client_address is used.
+        assert server.verify_request(None, ("10.0.0.5", 9999)) is True
+        assert server.verify_request(None, ("10.0.0.255", 9999)) is True
+    finally:
+        server.server_close()
+
+
+def test_verify_request_rejects_outside_network(caplog):
+    """verify_request returns False (with a console warning) for IPs
+    outside the allowlist."""
+    import logging
+    rpc_mod = _load_rpc_server()
+    server = rpc_mod.FilteredXMLRPCServer(
+        ("127.0.0.1", 19996),  # nosec — test only
+        allowed_ips_str="10.0.0.0/24",
+    )
+    try:
+        # Outside the allowed CIDR.
+        assert server.verify_request(None, ("192.168.1.1", 9999)) is False
+    finally:
+        server.server_close()
+
+
+def test_verify_request_rejects_unparseable_ip():
+    """verify_request handles garbage IPs without crashing."""
+    rpc_mod = _load_rpc_server()
+    server = rpc_mod.FilteredXMLRPCServer(
+        ("127.0.0.1", 19995),  # nosec — test only
+        allowed_ips_str="10.0.0.0/24",
+    )
+    try:
+        # IPv6 or garbage: ip_address raises ValueError -> caught -> False.
+        assert server.verify_request(None, ("not-an-ip", 9999)) is False
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
     test_get_auth_token_none_by_default()
     test_get_auth_token_reads_env()

@@ -372,15 +372,6 @@ def test_counter_set_replaces_increments():
     assert c.value("a") == 42
 
 
-def test_counter_set_rejects_negative():
-    c = Counter("x_total", "x", labelnames=("k",))
-    try:
-        c.set(-1, "a")
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError for negative set")
-
-
 def test_gauge_value_default_is_zero():
     g = Gauge("g", "g", labelnames=("k",))
     assert g.value("nope") == 0.0

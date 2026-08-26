@@ -639,7 +639,6 @@ def test_run_fem_analysis_gui_no_solver_factory():
     sys.modules["FreeCAD"].getDocument = lambda name: doc if name == "Doc1" else None
     fem = sys.modules["ObjectsFem"]
     # Temporarily remove solver factories; autouse fixture restores them.
-    saved_solver1 = fem.makeSolverCalculiXCcxTools
     saved_solver2 = getattr(fem, "makeSolverCalculixCcxTools", None)
     del fem.makeSolverCalculiXCcxTools
     if saved_solver2 is not None:

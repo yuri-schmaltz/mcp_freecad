@@ -300,7 +300,6 @@ def test_verify_request_allows_in_network():
 def test_verify_request_rejects_outside_network(caplog):
     """verify_request returns False (with a console warning) for IPs
     outside the allowlist."""
-    import logging
     rpc_mod = _load_rpc_server()
     server = rpc_mod.FilteredXMLRPCServer(
         ("127.0.0.1", 19996),  # nosec — test only

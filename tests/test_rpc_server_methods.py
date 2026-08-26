@@ -21,7 +21,6 @@ import importlib.util
 import io
 import os
 import sys
-import tempfile
 import types
 from pathlib import Path
 
@@ -357,7 +356,6 @@ def test_get_active_screenshot_queue_timeout_returns_none():
     # the get times out.
     import queue as _q
     req_q: _q.Queue = _q.Queue()
-    resp_q: _q.Queue = _q.Queue()
     saved_put = rpc_server.rpc_request_queue.put
     saved_get = rpc_server.rpc_response_queue.get
     rpc_server.rpc_request_queue.put = req_q.put  # type: ignore[assignment]
@@ -370,6 +368,12 @@ def test_get_active_screenshot_queue_timeout_returns_none():
     finally:
         rpc_server.rpc_request_queue.put = saved_put
         rpc_server.rpc_response_queue.get = saved_get
+        # Drain the unused put queue we created.
+        try:
+            while True:
+                req_q.get_nowait()
+        except _q.Empty:
+            pass
 
 
 def test_get_active_screenshot_jpeg_pillow_missing_returns_none():

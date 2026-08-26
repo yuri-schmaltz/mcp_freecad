@@ -255,7 +255,6 @@ def test_edit_object_failure_reports_error():
 
 def test_edit_object_validation_error_returns_text_response():
     """Invalid edit_object input short-circuits to a text response."""
-    from pydantic import ValidationError
 
     # Pass invalid obj_properties (not a dict) to trigger validation failure.
     fake = FakeFreeCAD(

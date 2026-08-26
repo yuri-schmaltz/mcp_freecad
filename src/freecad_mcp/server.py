@@ -35,6 +35,30 @@ from .tool_policy import format_policy_for_log, resolve_tool_policy
 from .utils import text_response as _text_response_helper
 
 
+def _locale_suggests_pt_br() -> bool:
+    """Return True if the system locale suggests PT-BR.
+
+    Looks at ``LC_ALL`` / ``LC_MESSAGES`` / ``LANG`` env vars (in that
+    priority order) and matches the prefix ``pt``. The check is loose
+    on purpose (``pt``, ``pt_BR``, ``pt-BR``, ``pt_PT`` all match) so
+    that any Portuguese-speaking operator gets the gabarito without
+    having to set a separate env var.
+
+    v1.0.3 — this is a soft default. Operators who want explicit
+    control can still use ``FREECAD_MCP_LOAD_GABARITO=1`` (force on)
+    or ``FREECAD_MCP_NO_DIRECTIVE_PREFIX=1`` (force off).
+    """
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            continue
+        # POSIX form: ``pt_BR.UTF-8``; Windows form: ``pt-BR``.
+        first = raw.replace("-", "_").split("_", 1)[0].lower()
+        if first == "pt":
+            return True
+    return False
+
+
 def _gabarito_enabled() -> bool:
     """Return True if the gabarito (PT-BR directive set) should be loaded.
 
@@ -44,10 +68,19 @@ def _gabarito_enabled() -> bool:
     forces the gabarito OFF even if the opt-in env var is set, so
     deployments that relied on the old knob to suppress the prefix keep
     working unchanged.
+
+    v1.0.3 — a PT-BR locale (``LC_ALL``/``LC_MESSAGES``/``LANG`` starting
+    with ``pt``) flips the default to ON, so a Portuguese-speaking
+    operator running ``uvx mcp-freecad`` gets the gabarito without
+    extra configuration. Explicit env vars always win over the
+    locale-based default.
     """
     if os.environ.get("FREECAD_MCP_NO_DIRECTIVE_PREFIX", "").strip().lower() in {"1", "true", "yes", "on"}:
         return False
-    return os.environ.get("FREECAD_MCP_LOAD_GABARITO", "").strip().lower() in {"1", "true", "yes", "on"}
+    explicit = os.environ.get("FREECAD_MCP_LOAD_GABARITO", "").strip().lower() in {"1", "true", "yes", "on"}
+    if explicit:
+        return True
+    return _locale_suggests_pt_br()
 
 
 def _load_system_directives() -> str:

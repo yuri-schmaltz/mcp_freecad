@@ -75,18 +75,60 @@ def test_load_system_directives_gabarito_opt_in_reads_file(monkeypatch):
 
 
 def test_load_system_directives_opt_in_default_is_english(monkeypatch):
-    """When the gabarito is NOT opted in, the loader returns English text,
-    not the Portuguese file (which would otherwise leak into every LLM
-    call by default).
+    """When the gabarito is NOT opted in AND the locale is not PT-BR,
+    the loader returns English text, not the Portuguese file (which
+    would otherwise leak into every LLM call by default).
+
+    v1.0.3 — a Portuguese locale (``LANG=pt*``) flips the default to
+    ON so PT-BR-speaking operators don't have to set a separate env
+    var. This test pins LANG to en_US to make that boundary explicit.
     """
     monkeypatch.delenv("FREECAD_MCP_LOAD_GABARITO", raising=False)
     monkeypatch.delenv("FREECAD_MCP_NO_DIRECTIVE_PREFIX", raising=False)
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    monkeypatch.setenv("LC_MESSAGES", "en_US.UTF-8")
     import freecad_mcp.server as srv
     text = srv._load_system_directives()
     assert isinstance(text, str)
     # The PT-BR gabarito contains the word "DIRETRIZES" (uppercase); the
     # English fallback must NOT.
     assert "DIRETRIZES" not in text
+
+
+def test_load_system_directives_pt_locale_enables_gabarito_by_default(monkeypatch):
+    """v1.0.3 — a PT-BR locale flips the gabarito default to ON."""
+    monkeypatch.delenv("FREECAD_MCP_LOAD_GABARITO", raising=False)
+    monkeypatch.delenv("FREECAD_MCP_NO_DIRECTIVE_PREFIX", raising=False)
+    monkeypatch.setenv("LANG", "pt_BR.UTF-8")
+    monkeypatch.setenv("LC_ALL", "pt_BR.UTF-8")
+    monkeypatch.setenv("LC_MESSAGES", "pt_BR.UTF-8")
+    import freecad_mcp.server as srv
+    text = srv._load_system_directives()
+    assert isinstance(text, str)
+    # The PT-BR gabarito contains the word "DIRETRIZES"; the English
+    # fallback does not.
+    assert "DIRETRIZES" in text
+
+
+def test_load_system_directives_pt_locale_can_be_overridden_off(monkeypatch):
+    """v1.0.3 — explicit NO_DIRECTIVE_PREFIX still wins over locale."""
+    monkeypatch.delenv("FREECAD_MCP_LOAD_GABARITO", raising=False)
+    monkeypatch.setenv("FREECAD_MCP_NO_DIRECTIVE_PREFIX", "1")
+    monkeypatch.setenv("LANG", "pt_BR.UTF-8")
+    import freecad_mcp.server as srv
+    text = srv._load_system_directives()
+    assert "DIRETRIZES" not in text
+
+
+def test_load_system_directives_pt_locale_explicit_opt_in_works(monkeypatch):
+    """v1.0.3 — explicit FREECAD_MCP_LOAD_GABARITO=1 works even on en_US."""
+    monkeypatch.delenv("FREECAD_MCP_NO_DIRECTIVE_PREFIX", raising=False)
+    monkeypatch.setenv("FREECAD_MCP_LOAD_GABARITO", "1")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    import freecad_mcp.server as srv
+    text = srv._load_system_directives()
+    assert "DIRETRIZES" in text
 
 
 def test_max_instructions_chars_truncates():

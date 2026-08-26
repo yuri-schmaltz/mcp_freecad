@@ -77,6 +77,46 @@ def test_add_screenshot_appends_image():
     assert img_part.mimeType == "image/png"
 
 
+def test_add_screenshot_appends_image_jpeg():
+    """v1.0.3 — image_format='jpeg' must yield mimeType='image/jpeg'."""
+    base = text_response("ok")
+    out = add_screenshot_if_available(
+        base, "BASE64DATA", only_text_feedback=False, image_format="jpeg"
+    )
+    img_part = out[-1]
+    assert img_part.mimeType == "image/jpeg"
+
+
+def test_add_screenshot_appends_image_webp():
+    """v1.0.3 — image_format='webp' must yield mimeType='image/webp'."""
+    base = text_response("ok")
+    out = add_screenshot_if_available(
+        base, "BASE64DATA", only_text_feedback=False, image_format="webp"
+    )
+    img_part = out[-1]
+    assert img_part.mimeType == "image/webp"
+
+
+def test_add_screenshot_appends_image_jpg_alias():
+    """v1.0.3 — 'jpg' is a valid alias for 'jpeg'."""
+    base = text_response("ok")
+    out = add_screenshot_if_available(
+        base, "BASE64DATA", only_text_feedback=False, image_format="jpg"
+    )
+    img_part = out[-1]
+    assert img_part.mimeType == "image/jpeg"
+
+
+def test_add_screenshot_unknown_format_falls_back_to_png():
+    """v1.0.3 — unknown image_format falls back to image/png (back-compat)."""
+    base = text_response("ok")
+    out = add_screenshot_if_available(
+        base, "BASE64DATA", only_text_feedback=False, image_format="tiff"
+    )
+    img_part = out[-1]
+    assert img_part.mimeType == "image/png"
+
+
 def test_prefix_enabled_via_load_gabarito():
     """FREECAD_MCP_LOAD_GABARITO=1 turns the audit prefix on."""
     import os

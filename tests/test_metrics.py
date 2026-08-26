@@ -227,5 +227,135 @@ def test_health_check_circuit_short_circuits_is_absolute(monkeypatch):
     assert third == 7.0, f"BUG: counter tripled on third call: {third}"
 
 
+# ---------------------------------------------------------------------------
+# v1.0.3 — direct coverage of MetricsRegistry / format_prometheus
+# ---------------------------------------------------------------------------
+
+def test_registry_uptime_is_monotonic():
+    import time as _time
+    r = MetricsRegistry()
+    first = r.uptime()
+    _time.sleep(0.01)
+    second = r.uptime()
+    assert second >= first
+
+
+def test_as_dict_includes_uptime_seconds():
+    r = MetricsRegistry()
+    snap = r.as_dict()
+    assert "uptime_seconds" in snap
+    assert isinstance(snap["uptime_seconds"], float)
+    assert snap["uptime_seconds"] >= 0
+
+
+def test_as_dict_circuit_short_circuits_serialised_as_total():
+    r = MetricsRegistry()
+    r.circuit_short_circuits.set(42)
+    snap = r.as_dict()
+    assert snap["circuit_short_circuits_total"] == 42
+
+
+def test_as_dict_histogram_empty_no_tool_duration_count_keys():
+    r = MetricsRegistry()
+    snap = r.as_dict()
+    # No observations recorded -> no per-tool histogram entries.
+    assert snap["tool_duration_count"] == {}
+
+
+def test_format_prometheus_includes_help_and_type_for_all_metrics():
+    r = MetricsRegistry()
+    r.tool_calls.inc("create_object", "success")
+    r.validation_failures.inc("create_object")
+    r.circuit_short_circuits.set(3)
+    r.circuit_state.set(1)
+    out = format_prometheus(r)
+    for metric_name in (
+        "freecad_mcp_tool_calls_total",
+        "freecad_mcp_tool_duration_seconds",
+        "freecad_mcp_validation_failures_total",
+        "freecad_mcp_circuit_state",
+        "freecad_mcp_circuit_short_circuits_total",
+        "freecad_mcp_uptime_seconds",
+    ):
+        assert f"# HELP {metric_name}" in out, f"missing HELP for {metric_name}"
+        assert f"# TYPE {metric_name}" in out, f"missing TYPE for {metric_name}"
+
+
+def test_format_prometheus_includes_inf_bucket():
+    r = MetricsRegistry()
+    r.tool_duration.observe(100.0, "create_object")  # > 60s default max
+    out = format_prometheus(r)
+    assert 'le="+Inf"' in out
+
+
+def test_format_prometheus_ends_with_newline():
+    """Prometheus expects each line LF-terminated and a final newline."""
+    r = MetricsRegistry()
+    out = format_prometheus(r)
+    assert out.endswith("\n")
+
+
+def test_format_prometheus_empty_registry_is_well_formed():
+    """An empty registry still renders valid Prometheus text."""
+    r = MetricsRegistry()
+    out = format_prometheus(r)
+    # Every HELP/TYPE pair should be present, even with zero samples.
+    assert "# HELP freecad_mcp_tool_calls_total" in out
+    assert "# TYPE freecad_mcp_tool_calls_total counter" in out
+    # No actual sample lines yet, but the HELP/TYPE headers must exist.
+    assert "freecad_mcp_uptime_seconds " in out  # uptime is sampled
+
+
+def test_histogram_zero_count_snapshot_is_all_zeros():
+    """snapshot() for an unobserved label returns zeros, not KeyError."""
+    h = Histogram("h", "h", labelnames=("k",))
+    snap = h.snapshot("k")
+    assert snap["count"] == 0
+    assert snap["sum"] == 0.0
+    assert snap["le_inf"] == 0
+
+
+def test_histogram_invalid_buckets_rejected():
+    """v1.0.3 — explicit guard against non-monotonic / non-positive buckets."""
+    for bad in [(0.0, 1.0), (1.0, 0.5), (-1.0, 1.0), (1.0, 1.0)]:
+        try:
+            Histogram("x", "x", buckets=bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for buckets={bad}")
+
+
+def test_counter_set_replaces_increments():
+    """v1.0.3 — ``set`` overwrites the absolute value (used by the
+    breaker snapshot path)."""
+    c = Counter("x_total", "x", labelnames=("k",))
+    c.inc("a", amount=5)
+    assert c.value("a") == 5
+    c.set(42, "a")
+    assert c.value("a") == 42
+
+
+def test_counter_set_rejects_negative():
+    c = Counter("x_total", "x", labelnames=("k",))
+    try:
+        c.set(-1, "a")
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for negative set")
+
+
+def test_gauge_value_default_is_zero():
+    g = Gauge("g", "g", labelnames=("k",))
+    assert g.value("nope") == 0.0
+
+
+def test_gauge_overwrites_on_set():
+    g = Gauge("g", "g", labelnames=("k",))
+    g.set(1, "a")
+    g.set(2, "a")
+    g.set(3, "a")
+    assert g.value("a") == 3
+
+
 if __name__ == "__main__":
     print("Run with pytest; direct invocation is not supported.")

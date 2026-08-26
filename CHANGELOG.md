@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-08-26
+
+**Theme: Hardening & observability.** Audit gauntlet result — every
+item from the tier plan delivered. 401 tests (up from 318), 65 %
+coverage (up from 61 %), ruff & mypy clean.
+
+### Bug Fixes
+
+- **`add_screenshot_if_available` hardcoded `mimeType="image/png"`**
+  even when the screenshot bytes were JPEG/WebP, breaking strict MCP
+  clients. The helper now takes an explicit `image_format` argument
+  and reports `image/jpeg`, `image/webp`, or `image/png` correctly.
+  Fixes get_view / get_active_view responses that transcoded to
+  non-PNG formats.
+- **`get_active_screenshot` ran two XML-RPC calls** (a
+  `_SCREENSHOT_SUPPORT_CHECK` probe via `execute_code`, then the
+  actual capture). The race between them could return blank
+  screenshots; the happy path paid double latency. The client now
+  uses one round-trip and the RPC's structured `{"success": False,
+  "reason": ...}` response.
+- **Maintenance email in SECURITY.md** still pointed at the upstream
+  fork's author (`nekanat.stock@gmail.com`). Updated to
+  `yuri.schmaltz@gmail.com`.
+- **`schemas._check_type` was a silent no-op** for unknown FreeCAD
+  TypeId prefixes. Now logs a warning so LLM typos surface at the
+  MCP layer instead of failing with a vague `Fault` downstream.
+
+### Added
+
+- **`FREECAD_MCP_LOAD_GABARITO` flips to ON by default when the
+  system locale is PT-BR** (`LANG=pt*`, `LC_ALL=pt*`, `LC_MESSAGES=pt*`).
+  Portuguese-speaking operators running `uvx mcp-freecad` get the
+  directive set without extra configuration. English speakers keep
+  the short English fallback. Explicit env vars always win.
+- **New `get_active_screenshot_with_status`** returns a structured
+  `{"success", "screenshot", "format"}` or `{"success": False,
+  "reason": "rpc_error"|"no_capture"|"view_unsupported"|...}` so
+  callers can distinguish "view wrong" from "RPC dead". The legacy
+  `get_active_screenshot` (returning b64 or `None`) is preserved for
+  back-compat.
+- **`RequestTracker.cancel_all_pending()` and `invalidate_cache()`**
+  — bulk-flush helpers for shutdown paths and "underlying state has
+  changed, drop cached idempotent answers" scenarios. Exposed as RPC
+  methods (`cancel_all_pending_requests`, `invalidate_idempotency_cache`)
+  and through the `FreeCADConnection` client.
+- **`pydantic>=2.0` declared** in `requirements.txt` and
+  `pyproject.toml` (was a transitive install).
+- **`pytest --strict-markers`** so typos in `@pytest.mark.X` fail
+  the suite instead of being silently ignored.
+- **`@pytest.mark.slow` applied** to network-bound tests; can be
+  skipped via `pytest -m "not slow"` for a fast feedback loop.
+
+### Refactor
+
+- **`validate_allowed_ips` extracted** to a pure
+  `_ip_allowlist.py` module (testable without FreeCAD). The
+  `rpc_server.py` wrapper is now a thin re-export of
+  `parse_allowlist` / `parse_allowlist_to_networks`. 26 new unit
+  tests cover every edge case (malformed-list rejection, wildcard
+  refusal, IPv6, empty input, etc.).
+- **`SCREENSHOT_SUPPORT_CHECK` removed** — the probe snippet is no
+  longer needed because `get_active_screenshot` returns structured
+  failure reasons directly.
+
+### Tests
+
+- 83 new tests across `test_ip_allowlist.py`,
+  `test_rpc_server_methods.py`, `test_freecad_client.py`,
+  `test_responses.py`, `test_metrics.py`, `test_request_tracking.py`,
+  and `test_server_module.py`. Total: **401 tests, 65 % coverage**.
+- Coverage of `rpc_server.py` improved from 32 % to 39 % via
+  direct tests of `_tracked_call`, `health_check`,
+  `cancel_all_pending_requests`, `invalidate_idempotency_cache`,
+  `undo`/`redo`/`save_document`/`export_object`,
+  `_timeout_for` precedence, and `get_active_view`.
+
+### Security
+
+- SECURITY.md now explicitly documents that `execute_code` runs
+  `exec(code, globals())` — there is **no sandbox**, the blocklist
+  is a guardrail, not a containment boundary. Operators should run
+  FreeCAD in a container or VM and disable `execute_code` in
+  multi-tenant deployments.
+
 ## [1.0.2](https://github.com/yuri-schmaltz/mcp_freecad/compare/v1.0.1...v1.0.2) (2026-08-08)
 
 

@@ -1,20 +1,25 @@
 """Screenshot capture and transcoding helpers.
 
 Extracted from ``rpc_server`` so the Pillow transcode logic is
-testable without a running FreeCAD instance. The module also owns
-the view-support probe string and the PNG→JPEG/WebP transcoder.
+testable without a running FreeCAD instance.
 
-Two helpers are exported:
+Public surface:
 
 * :func:`transcode_to_format` \u2014 PNG bytes \u2192 base64 JPEG/WebP (or None
   on failure / no Pillow / unsupported target).
-* :data:`SCREENSHOT_SUPPORT_CHECK` \u2014 the snippet of Python we send
-  to the FreeCAD GUI thread to decide whether the current view
-  supports ``saveImage``. Used by :mod:`freecad_client`.
 
 The capture side (view switching, selection, ``saveImage``) lives in
 the ``FreeCADRPC`` class in :mod:`rpc_server` because it requires a
 live FreeCAD context.
+
+v1.0.3 — removed ``SCREENSHOT_SUPPORT_CHECK``. The previous client
+implementation ran this snippet via ``execute_code`` to probe
+whether the current view supports ``saveImage`` (one RPC), then ran
+the capture (a second RPC). The race between the two calls could
+return a blank screenshot if the user changed workbenches in
+between, and the happy path paid double latency. The server's
+``get_active_screenshot`` now returns ``{"success": False, "reason":
+...}`` directly, so one RPC is enough.
 """
 from __future__ import annotations
 
@@ -25,30 +30,6 @@ try:
     import FreeCAD
 except Exception:
     FreeCAD = None  # type: ignore[assignment]
-
-# The snippet we run on the GUI thread to probe whether the current
-# view supports ``saveImage``. Used by the client to decide whether
-# to call ``get_active_screenshot`` or fall back to a text response.
-SCREENSHOT_SUPPORT_CHECK = """
-import FreeCAD
-import FreeCADGui
-
-if FreeCAD.Gui.ActiveDocument and FreeCAD.Gui.ActiveDocument.ActiveView:
-    view_type = type(FreeCAD.Gui.ActiveDocument.ActiveView).__name__
-
-    # These view types don't support screenshots
-    unsupported_views = ['SpreadsheetGui::SheetView', 'DrawingGui::DrawingView', 'TechDrawGui::MDIViewPage']
-
-    if view_type in unsupported_views or not hasattr(FreeCAD.Gui.ActiveDocument.ActiveView, 'saveImage'):
-        print("Current view does not support screenshots")
-        False
-    else:
-        print(f"Current view supports screenshots: {view_type}")
-        True
-else:
-    print("No active view")
-    False
-"""
 
 
 def transcode_to_format(png_bytes: bytes, target_format: str) -> str | None:
@@ -92,7 +73,4 @@ def transcode_to_format(png_bytes: bytes, target_format: str) -> str | None:
         return None
 
 
-__all__ = [
-    "SCREENSHOT_SUPPORT_CHECK",
-    "transcode_to_format",
-]
+__all__ = ["transcode_to_format"]

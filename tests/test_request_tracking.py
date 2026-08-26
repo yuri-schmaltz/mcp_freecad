@@ -433,6 +433,64 @@ def test_cancel_request_invalid_input():
         assert "request_id" in result["error"]
 
 
+# ---------------------------------------------------------------------------
+# v1.0.3 — bulk-flush helpers
+# ---------------------------------------------------------------------------
+
+def test_cancel_all_pending_returns_count_and_clears():
+    t = RequestTracker()
+    t.cancel("a")
+    t.cancel("b")
+    t.cancel("c")
+    assert len(t.pending_cancellations()) == 3
+    n = t.cancel_all_pending()
+    assert n == 3
+    assert t.pending_cancellations() == ()
+
+
+def test_cancel_all_pending_idempotent():
+    t = RequestTracker()
+    t.cancel("a")
+    assert t.cancel_all_pending() == 1
+    # Second flush is a no-op.
+    assert t.cancel_all_pending() == 0
+
+
+def test_cancel_all_pending_does_not_clear_cache():
+    """Flush only clears pending cancellations; the cached-response
+    set is preserved so retries can still short-circuit."""
+    t = RequestTracker()
+    t.cache_response("a", {"value": 1})
+    t.cancel("a")
+    t.cancel_all_pending()
+    assert t.get_cached("a") == {"value": 1}
+
+
+def test_invalidate_cache_drops_all_entries():
+    t = RequestTracker()
+    t.cache_response("a", 1)
+    t.cache_response("b", 2)
+    n = t.invalidate_cache()
+    assert n == 2
+    assert t.get_cached("a") is None
+    assert t.get_cached("b") is None
+    assert t.cached_ids() == ()
+
+
+def test_invalidate_cache_empty_returns_zero():
+    t = RequestTracker()
+    assert t.invalidate_cache() == 0
+
+
+def test_invalidate_cache_does_not_clear_cancellations():
+    t = RequestTracker()
+    t.cache_response("a", 1)
+    t.cancel("b")
+    t.invalidate_cache()
+    # cancellations are independent state.
+    assert t.is_cancelled("b") is True
+
+
 if __name__ == "__main__":
     test_tracker_get_cached_none_for_unknown_id()
     test_tracker_cache_and_retrieve()

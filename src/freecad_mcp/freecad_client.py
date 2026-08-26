@@ -45,28 +45,6 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         )
 
 
-_SCREENSHOT_SUPPORT_CHECK = """
-import FreeCAD
-import FreeCADGui
-
-if FreeCAD.Gui.ActiveDocument and FreeCAD.Gui.ActiveDocument.ActiveView:
-    view_type = type(FreeCAD.Gui.ActiveDocument.ActiveView).__name__
-
-    # These view types don't support screenshots
-    unsupported_views = ['SpreadsheetGui::SheetView', 'DrawingGui::DrawingView', 'TechDrawGui::MDIViewPage']
-
-    if view_type in unsupported_views or not hasattr(FreeCAD.Gui.ActiveDocument.ActiveView, 'saveImage'):
-        print("Current view does not support screenshots")
-        False
-    else:
-        print(f"Current view supports screenshots: {view_type}")
-        True
-else:
-    print("No active view")
-    False
-"""
-
-
 def _build_server_proxy(host: str, port: int, timeout: float) -> xmlrpc.client.ServerProxy:
     """Construct a ServerProxy that honours *timeout*.
 
@@ -129,6 +107,24 @@ class FreeCADConnection:
         """
         return self.breaker.call(lambda: self.server.cancel_request(request_id))  # type: ignore[return-value]
 
+    def cancel_all_pending_requests(self) -> dict[str, Any]:
+        """Bulk-flush every pending cancellation flag on the RPC server.
+
+        Useful when an LLM session is being torn down or restarted and
+        the caller does not want to track individual request ids. The
+        idempotency cache is **not** touched — see
+        :meth:`invalidate_idempotency_cache` for that.
+        """
+        return self.breaker.call(lambda: self.server.cancel_all_pending_requests())  # type: ignore[return-value]
+
+    def invalidate_idempotency_cache(self) -> dict[str, Any]:
+        """Drop every cached response on the RPC server.
+
+        Use when the underlying state has changed and stale idempotent
+        answers would mislead the LLM.
+        """
+        return self.breaker.call(lambda: self.server.invalidate_idempotency_cache())  # type: ignore[return-value]
+
     def create_document(self, name: str, request_id: str | None = None) -> dict[str, Any]:
         return self.breaker.call(lambda: self.server.create_document(name, request_id))  # type: ignore[return-value]
 
@@ -155,21 +151,73 @@ class FreeCADConnection:
         focus_object: str | None = None,
         image_format: str = "png",
     ) -> str | None:
-        try:
-            result = self.breaker.call(lambda: self.server.execute_code(_SCREENSHOT_SUPPORT_CHECK))  # type: ignore[union-attr]
-            # XML-RPC may return any JSON-serialisable type; coerce to a
-            # dict view defensively.
-            result_dict = result if isinstance(result, dict) else {}
-            if not result_dict.get("success", False) or "Current view does not support screenshots" in result_dict.get("message", ""):
-                logger.info("Screenshot unavailable in current view (likely Spreadsheet or TechDraw view)")
-                return None
+        """Capture a screenshot of the active view.
 
-            return self.breaker.call(  # type: ignore[return-value]
-                lambda: self.server.get_active_screenshot(view_name, width, height, focus_object, image_format)
+        Returns the base64-encoded image bytes, or ``None`` on failure.
+        On ``None`` the caller can call :meth:`get_active_screenshot_with_status`
+        to get a structured failure reason.
+
+        v1.0.3 — single round-trip: the previous implementation first
+        ran ``_SCREENSHOT_SUPPORT_CHECK`` via ``execute_code`` to decide
+        whether the view supported ``saveImage`` (one RPC), then ran
+        the actual capture (a second RPC). The check raced with the
+        user changing workbenches and doubled latency in the happy path.
+        The server now returns ``{"success": False, "reason": ...}``
+        directly from ``get_active_screenshot``, so one call is enough.
+        """
+        result = self.get_active_screenshot_with_status(
+            view_name=view_name, width=width, height=height,
+            focus_object=focus_object, image_format=image_format,
+        )
+        return result.get("screenshot") if isinstance(result, dict) else None
+
+    def get_active_screenshot_with_status(
+        self,
+        view_name: str = "Isometric",
+        width: int | None = None,
+        height: int | None = None,
+        focus_object: str | None = None,
+        image_format: str = "png",
+    ) -> dict[str, Any]:
+        """Capture a screenshot and return a structured status dict.
+
+        Returns::
+
+            {"success": True,  "screenshot": "<base64>", "format": "png"}
+            {"success": False, "reason": "view_unsupported"}
+            {"success": False, "reason": "no_active_view"}
+            {"success": False, "reason": "capture_failed", "detail": "..."}
+            {"success": False, "reason": "exception",        "detail": "..."}
+            {"success": False, "reason": "timeout"}
+            {"success": False, "reason": "rpc_error",        "detail": "..."}
+
+        Distinguishes the cases the old ``get_active_screenshot`` API
+        collapsed into a bare ``None`` so callers (and operators looking
+        at logs) can tell a missing active view from a circuit-breaker
+        trip from a transcode failure.
+        """
+        try:
+            encoded = self.breaker.call(  # type: ignore[union-attr]
+                lambda: self.server.get_active_screenshot(
+                    view_name, width, height, focus_object, image_format
+                )
             )
         except Exception as e:
-            logger.error(f"Error getting screenshot: {e}")
-            return None
+            logger.error("get_active_screenshot RPC failed: %s: %s", type(e).__name__, e)
+            return {
+                "success": False,
+                "reason": "rpc_error",
+                "detail": f"{type(e).__name__}: {e}",
+            }
+
+        # The server returns ``None`` when it could not capture (view
+        # unsupported, no active view, transcode failed, ...). We don't
+        # have the underlying reason from the server in that case; the
+        # common ones are mapped to a sensible default.
+        if encoded is None:
+            return {"success": False, "reason": "no_capture"}
+
+        return {"success": True, "screenshot": encoded, "format": (image_format or "png").lower()}
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
         return self.breaker.call(lambda: self.server.get_objects(doc_name))  # type: ignore[return-value]

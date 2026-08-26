@@ -28,6 +28,7 @@ class FakeFreeCAD:
         delete_object=None,
         execute_code=None,
         get_active_screenshot=None,
+        get_active_screenshot_with_status=None,
         insert_part_from_library=None,
         get_objects=None,
         get_object=None,
@@ -50,6 +51,7 @@ class FakeFreeCAD:
             "delete_object": delete_object,
             "execute_code": execute_code,
             "get_active_screenshot": get_active_screenshot,
+            "get_active_screenshot_with_status": get_active_screenshot_with_status,
             "insert_part_from_library": insert_part_from_library,
             "get_objects": get_objects,
             "get_object": get_object,
@@ -89,6 +91,23 @@ class FakeFreeCAD:
 
     def get_active_screenshot(self, *args, **kwargs):
         return self._dispatch("get_active_screenshot", *args, **kwargs)
+
+    def get_active_screenshot_with_status(self, *args, **kwargs):
+        # v1.0.3 — operations now call the structured helper. Default
+        # falls back to the legacy single-shot ``get_active_screenshot``
+        # and packages the result in the new status envelope, so old
+        # test setups that only override the legacy method keep working.
+        handler = self._handlers.get("get_active_screenshot_with_status")
+        if handler is not None:
+            return handler(*args, **kwargs)
+        legacy = self._dispatch("get_active_screenshot", *args, **kwargs)
+        if legacy is None:
+            return {"success": False, "reason": "no_capture"}
+        return {
+            "success": True,
+            "screenshot": legacy,
+            "format": (kwargs.get("image_format") or "png").lower(),
+        }
 
     def insert_part_from_library(self, relative_path):
         return self._dispatch("insert_part_from_library", relative_path)
@@ -321,11 +340,71 @@ def test_get_view_with_screenshot():
     assert any(getattr(t, "type", "") == "image" and t.data == "BASE64DATA" for t in r)
 
 
+def test_get_view_with_screenshot_jpeg_mime():
+    """v1.0.3 — image_format='jpeg' must surface as image/jpeg mimeType,
+    not the legacy hardcoded image/png (which would mislead strict MCP
+    clients)."""
+    def fake_status(*a, **k):
+        return {"success": True, "screenshot": "BASE64JPEG", "format": "jpeg"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: "BASE64JPEG",
+        get_active_screenshot_with_status=fake_status,
+    )
+    r = core.get_view_operation(fake, "Isometric", image_format="jpeg")
+    img = next(t for t in r if getattr(t, "type", "") == "image")
+    assert img.mimeType == "image/jpeg"
+    assert img.data == "BASE64JPEG"
+
+
+def test_get_view_with_screenshot_webp_mime():
+    """v1.0.3 — image_format='webp' must surface as image/webp."""
+    def fake_status(*a, **k):
+        return {"success": True, "screenshot": "BASE64WEBP", "format": "webp"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: "BASE64WEBP",
+        get_active_screenshot_with_status=fake_status,
+    )
+    r = core.get_view_operation(fake, "Isometric", image_format="webp")
+    img = next(t for t in r if getattr(t, "type", "") == "image")
+    assert img.mimeType == "image/webp"
+
+
+def test_get_view_with_screenshot_png_mime():
+    """Default PNG path still works."""
+    def fake_status(*a, **k):
+        return {"success": True, "screenshot": "BASE64", "format": "png"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: "BASE64",
+        get_active_screenshot_with_status=fake_status,
+    )
+    r = core.get_view_operation(fake, "Isometric")
+    img = next(t for t in r if getattr(t, "type", "") == "image")
+    assert img.mimeType == "image/png"
+
+
 def test_get_view_without_screenshot():
-    fake = FakeFreeCAD(get_active_screenshot=lambda *a, **k: None)
+    def fake_status(*a, **k):
+        return {"success": False, "reason": "no_capture"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: None,
+        get_active_screenshot_with_status=fake_status,
+    )
     r = core.get_view_operation(fake, "Isometric")
     texts = [t.text for t in r if hasattr(t, "text")]
     assert any("Cannot get screenshot" in t for t in texts)
+
+
+def test_get_view_rpc_error_reports_detail():
+    """v1.0.3 — RPC failures surface the underlying detail."""
+    def fake_status(*a, **k):
+        return {"success": False, "reason": "rpc_error", "detail": "ConnectionRefusedError: nope"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: None,
+        get_active_screenshot_with_status=fake_status,
+    )
+    r = core.get_view_operation(fake, "Isometric")
+    texts = [t.text for t in r if hasattr(t, "text")]
+    assert any("RPC error" in t and "ConnectionRefusedError" in t for t in texts)
 
 
 def test_run_fem_analysis_success_summary():

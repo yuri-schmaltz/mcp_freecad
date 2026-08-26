@@ -36,7 +36,6 @@ import io
 import ipaddress
 import os
 import queue
-import re
 import ssl
 import tempfile
 import threading
@@ -96,70 +95,32 @@ from ._commands import (
     _sync_toggle_states,
 )
 
-# IP allowlist validation (lives here rather than in _security_gate
-# because it is consumed by the ToggleRemoteConnectionsCommand via
-# the ConfiguredAllowedIPsCommand; the gate is for the *non-loopback
-# bind* case, this is for the *allowlist content* case).
-
-_COMMA_SEP_RE = re.compile(r"^\s*[^,\s]+(\s*,\s*[^,\s]+)*\s*$")
+# IP allowlist validation lives in :mod:`._ip_allowlist` (extracted
+# in v1.0.3 so the logic is testable without FreeCAD). The wrappers
+# below preserve the public surface that ``ConfigureAllowedIPsCommand``
+# and the test suite rely on.
+from ._ip_allowlist import (  # noqa: E402  — after the local imports above
+    parse_allowlist,
+    parse_allowlist_to_networks,
+)
 
 
 def validate_allowed_ips(allowed_ips_str: str) -> tuple[list[str], list[str]]:
-    """Validate a comma-separated string of IP addresses/subnets.
+    """Back-compat wrapper around :func:`._ip_allowlist.parse_allowlist`.
 
-    Returns a ``(valid, errors)`` tuple. ``valid`` is a list of
-    normalised entry strings that passed validation; ``errors`` is a
-    list of human-readable error messages (empty when the input is
-    fully valid).
-
-    Checks performed:
-
-    1. The overall string is well-formed comma-separated (no
-       leading/trailing commas, no empty entries between commas, not
-       blank).
-    2. Each individual entry is a valid IPv4/IPv6 address or CIDR
-       subnet (validated via the stdlib ``ipaddress`` module).
-    3. The entry does **not** cover the whole address space
-       (``0.0.0.0/0`` or ``::/0``) \u2014 that would expose the RPC server
-       to the entire internet if remote connections are enabled, which
-       is almost never what the user intended.
+    Validates a comma-separated string of IP addresses/subnets and
+    returns ``(valid, errors)``. See :mod:`._ip_allowlist` for the
+    detailed rules (malformed-list rejection, no ``0.0.0.0/0``, etc.).
     """
-    errors: list[str] = []
-
-    if not allowed_ips_str or not allowed_ips_str.strip():
-        return [], ["Input must not be empty."]
-
-    if not _COMMA_SEP_RE.match(allowed_ips_str):
-        return [], [
-            "Malformed list \u2014 check for leading/trailing commas, "
-            "double commas, or missing separators."
-        ]
-
-    valid: list[str] = []
-    for entry in allowed_ips_str.split(","):
-        entry = entry.strip()
-        try:
-            network = ipaddress.ip_network(entry, strict=False)
-        except ValueError:
-            errors.append(f"Invalid IP/subnet: '{entry}'")
-            continue
-        if network.prefixlen == 0:
-            errors.append(
-                f"Refusing insecure wildcard '{entry}' (matches every IP). "
-                "List concrete subnets instead, e.g. 192.168.0.0/16."
-            )
-            continue
-        valid.append(entry)
-    return valid, errors
+    return parse_allowlist(allowed_ips_str)
 
 
 def _parse_allowed_ips(allowed_ips_str: str) -> list:
-    """Parse a comma-separated string of IPs/subnets into ip_network objects."""
-    valid, errors = validate_allowed_ips(allowed_ips_str)
-    for msg in errors:
+    """Back-compat wrapper that also emits FreeCAD console warnings."""
+    def _warn(msg: str) -> None:
         if FreeCAD is not None and hasattr(FreeCAD, "Console"):
             FreeCAD.Console.PrintWarning(f"MCP RPC: {msg}, skipping\n")
-    return [ipaddress.ip_network(entry, strict=False) for entry in valid]
+    return list(parse_allowlist_to_networks(allowed_ips_str, on_warning=_warn))
 
 
 # --- Bearer-token auth + IP-filtered + TLS XML-RPC server -----------------
@@ -632,6 +593,34 @@ class FreeCADRPC:
         tracker = _get_tracker()
         cancelled = tracker.cancel(request_id)
         return {"success": True, "request_id": request_id, "cancelled": cancelled}
+
+    def cancel_all_pending_requests(self) -> dict[str, Any]:
+        """Bulk-flush every pending cancellation flag.
+
+        Useful for "abort the current session" semantics: any task that
+        has not yet started picking up its cancellation flag will see
+        it cleared (so a re-dispatch is *not* short-circuited), but
+        the bookkeeping is reset. The cached-response set is left
+        alone — see :meth:`invalidate_idempotency_cache` for that.
+
+        Returns ``{"success": True, "flushed": <int>}``.
+        """
+        tracker = _get_tracker()
+        n = tracker.cancel_all_pending()
+        return {"success": True, "flushed": n}
+
+    def invalidate_idempotency_cache(self) -> dict[str, Any]:
+        """Drop every cached response so future calls re-execute.
+
+        Use this when the underlying state (FreeCAD document, file on
+        disk) has changed and stale idempotent answers would mislead
+        the LLM.
+
+        Returns ``{"success": True, "dropped": <int>}``.
+        """
+        tracker = _get_tracker()
+        n = tracker.invalidate_cache()
+        return {"success": True, "dropped": n}
 
     def _tracked_call(
         self,

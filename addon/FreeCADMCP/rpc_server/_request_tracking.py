@@ -88,6 +88,38 @@ class RequestTracker:
                 return True
             return False
 
+    def cancel_all_pending(self) -> int:
+        """Mark every currently-pending cancellation as "consumed".
+
+        This is a bulk-flush helper used by shutdown paths: any task
+        that has already checked ``consume_cancel`` for its id won't
+        be affected (the flag was already cleared), but it returns
+        the size of the pending set so the caller can log "cancelled
+        N in-flight requests" diagnostics.
+
+        Returns the number of pending cancellations at flush time.
+        """
+        with self._lock:
+            n = len(self._cancelled)
+            self._cancelled.clear()
+            return n
+
+    def invalidate_cache(self) -> int:
+        """Drop all cached responses.
+
+        Subsequent calls with previously-cached request ids will be
+        re-executed instead of short-circuiting. Useful when the
+        underlying state (FreeCAD document, file on disk) has
+        changed and stale idempotent answers would mislead the LLM.
+
+        Returns the number of cached entries dropped.
+        """
+        with self._lock:
+            n = len(self._completed)
+            self._completed.clear()
+            self._completed_order.clear()
+            return n
+
     # --- introspection ---------------------------------------------------
 
     def cached_ids(self) -> tuple[str, ...]:

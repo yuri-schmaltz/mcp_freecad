@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 # Make src importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -56,6 +58,7 @@ def test_timeout_transport_uses_timeout():
     assert transport2._timeout >= 0.1
 
 
+@pytest.mark.slow
 def test_connection_to_unresponsive_peer_times_out():
     """Open a TCP socket that accepts but never responds.
 
@@ -115,6 +118,7 @@ def test_connection_to_unresponsive_peer_times_out():
         t.join(timeout=2)
 
 
+@pytest.mark.slow
 def test_connection_to_closed_port_fails_fast():
     """Connecting to a port with no listener should raise immediately,
     not hang for the OS default (~tens of seconds).
@@ -135,6 +139,66 @@ def test_connection_to_closed_port_fails_fast():
         print(f"  refused call raised {type(e).__name__} after {elapsed:.2f}s")
     else:
         raise AssertionError("expected ConnectionRefusedError")
+
+
+# ---------------------------------------------------------------------------
+# v1.0.3 — get_active_screenshot_with_status
+# ---------------------------------------------------------------------------
+
+def _make_client_with_mock_server(mocked):
+    """Build a FreeCADConnection whose .server returns *mocked* from any call."""
+    conn = fc.FreeCADConnection.__new__(fc.FreeCADConnection)
+    conn.timeout = 0.5
+    conn.breaker = fc.CircuitBreaker()
+    # Stand-in ServerProxy: every attribute access returns ``mocked``.
+    class _FakeServer:
+        def __getattr__(self, _name):
+            return lambda *a, **kw: mocked
+    conn.server = _FakeServer()
+    return conn
+
+
+def test_screenshot_status_success():
+    conn = _make_client_with_mock_server("BASE64DATA")
+    out = conn.get_active_screenshot_with_status(image_format="png")
+    assert out == {"success": True, "screenshot": "BASE64DATA", "format": "png"}
+
+
+def test_screenshot_status_format_normalised():
+    conn = _make_client_with_mock_server("BASE64")
+    out = conn.get_active_screenshot_with_status(image_format="JPEG")
+    assert out["format"] == "jpeg"
+
+
+def test_screenshot_status_no_capture():
+    """Server returns None (e.g. unsupported view) -> no_capture reason."""
+    conn = _make_client_with_mock_server(None)
+    out = conn.get_active_screenshot_with_status()
+    assert out == {"success": False, "reason": "no_capture"}
+
+
+def test_screenshot_status_rpc_error():
+    """When the RPC raises, the helper returns rpc_error."""
+    conn = _make_client_with_mock_server(None)
+    class _BoomServer:
+        def get_active_screenshot(self, *a, **kw):
+            raise ConnectionRefusedError("nope")
+    conn.server = _BoomServer()
+    out = conn.get_active_screenshot_with_status()
+    assert out["success"] is False
+    assert out["reason"] == "rpc_error"
+    assert "ConnectionRefusedError" in out["detail"]
+
+
+def test_screenshot_returns_b64_via_legacy_helper():
+    """``get_active_screenshot`` (no status) returns the b64 or None."""
+    conn = _make_client_with_mock_server("BASE64DATA")
+    assert conn.get_active_screenshot() == "BASE64DATA"
+
+
+def test_screenshot_legacy_returns_none_on_no_capture():
+    conn = _make_client_with_mock_server(None)
+    assert conn.get_active_screenshot() is None
 
 
 if __name__ == "__main__":

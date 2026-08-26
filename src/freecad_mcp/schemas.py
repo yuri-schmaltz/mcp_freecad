@@ -33,10 +33,13 @@ legacy ``dict`` shape and returns either a populated model or a
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+logger = logging.getLogger("FreeCADMCPschemas")
 
 # FreeCAD object name rules (from FreeCAD source):
 # - Must not be empty.
@@ -154,11 +157,18 @@ class CreateObjectRequest(_StrictModel):
     @field_validator("obj_type")
     @classmethod
     def _check_type(cls, value: str) -> str:
+        # We don't hard-fail on unknown prefixes because FreeCAD has
+        # 50+ TypeId prefixes and our allowlist is necessarily a
+        # subset; we just surface a warning so the LLM can catch
+        # typos (e.g. ``Part::Boxx``) before the request reaches
+        # FreeCAD and dies with a vague ``Fault``.
         if not any(value.startswith(prefix) for prefix in _KNOWN_TYPE_PREFIXES):
-            # Not a hard error \u2014 we just log a warning upstream. But
-            # surfacing the unknown prefix to the LLM helps the agent
-            # catch typos faster.
-            pass
+            logger.warning(
+                "create_object: obj_type=%r does not match a known FreeCAD "
+                "TypeId prefix (%s). The request will still be sent; "
+                "expect a 'Type not found' error from FreeCAD on misspellings.",
+                value, ", ".join(_KNOWN_TYPE_PREFIXES),
+            )
         return value
 
     @model_validator(mode="after")

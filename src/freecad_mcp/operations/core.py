@@ -1,17 +1,6 @@
 import logging
 from typing import Any
 
-try:
-    from mcp.types import ImageContent  # type: ignore
-except Exception:
-    from dataclasses import dataclass
-
-    @dataclass  # type: ignore[no-redef]
-    class ImageContent:
-        type: str
-        data: str
-        mimeType: str
-
 from ..freecad_client import FreeCADConnection
 from ..guidelines import check_code_conflict, check_path_conflict
 from ..metrics import MetricsRegistry
@@ -155,19 +144,35 @@ def get_view_operation(
     focus_object: str | None = None,
     image_format: str = "png",
 ) -> ToolResponse:
-    screenshot = freecad.get_active_screenshot(view_name, width, height, focus_object, image_format)
-    if screenshot is not None:
-        mime = {
-            "png": "image/png",
-            "jpeg": "image/jpeg",
-            "jpg": "image/jpeg",
-            "webp": "image/webp",
-        }.get((image_format or "png").lower(), "image/png")
-        return [ImageContent(type="image", data=screenshot, mimeType=mime)]
-    return text_response(
-        f"Cannot get screenshot in the current view type or format {image_format!r} "
-        "(such as TechDraw or Spreadsheet; or Pillow is not installed for JPEG/WebP)"
+    # v1.0.3 — use the structured helper so the error message reflects
+    # the actual reason (no active view vs unsupported view type vs
+    # Pillow-missing for JPEG/WebP), not a generic "cannot get
+    # screenshot".
+    status = freecad.get_active_screenshot_with_status(
+        view_name=view_name, width=width, height=height,
+        focus_object=focus_object, image_format=image_format,
     )
+    if status.get("success"):
+        return add_screenshot_if_available(
+            [], status["screenshot"], only_text_feedback=False, image_format=image_format,
+        )
+    reason = status.get("reason", "unknown")
+    detail = status.get("detail")
+    if reason == "no_capture":
+        # Server returned None; usually means unsupported view type
+        # (Spreadsheet, TechDraw, Drawing) or Pillow missing for JPEG/WebP.
+        msg = (
+            f"Cannot get screenshot in the current view type or format {image_format!r}. "
+            "Likely causes: TechDraw/Spreadsheet/Drawing view, or Pillow not installed "
+            "for JPEG/WebP."
+        )
+    elif reason == "rpc_error":
+        msg = f"RPC error while capturing screenshot: {detail}"
+    elif reason == "timeout":
+        msg = f"Screenshot capture timed out ({detail})"
+    else:
+        msg = f"Cannot get screenshot (reason={reason}, detail={detail})"
+    return text_response(msg)
 
 
 @safe_operation

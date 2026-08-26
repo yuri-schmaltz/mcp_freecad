@@ -74,11 +74,21 @@ XML-RPC. The trust assumptions:
 ## What is **not** in scope
 
 - The `execute_code` tool **intentionally** runs arbitrary Python
-  in-process. If you cannot trust the LLM (or the user behind it) to
-  that extent, do not enable `execute_code`. There is no whitelist
-  of "safe" snippets — FreeCAD's API is too broad to enumerate.
-  Set `FREECAD_MCP_DISABLED_TOOLS=execute_code` to turn it off in
-  deployments that don't need it.
+  in-process via `exec(code, globals())`. The code executes in the
+  FreeCAD GUI process with **full access to the host filesystem,
+  network, OS services, and every loaded Python module** — there is
+  no sandbox, no RestrictedPython, no whitelist of "safe" snippets.
+  The blocklist in `src/freecad_mcp/guidelines.py` is a guardrail
+  that catches the most dangerous builtins (`eval`, `exec`,
+  `subprocess.*`, network libraries, `pickle`/`marshal`/`ctypes`,
+  etc.), but it is **not** a sandbox: a sophisticated prompt can
+  still construct a payload the regex does not match (e.g. string
+  assembly, indirect imports, attribute traversal).
+  If you cannot trust the LLM (or the user behind it) to that extent,
+  do not enable `execute_code`. Run FreeCAD inside a container or VM
+  (see "Production deployment checklist" in the README), and set
+  `FREECAD_MCP_DISABLED_TOOLS=execute_code` to turn it off entirely
+  in deployments that don't need it.
 - The `open` family of operations on the XML-RPC server is not
   authenticated **at the application layer** when `remote_enabled`
   is off (default = localhost). With `remote_enabled=true` plus
@@ -94,7 +104,7 @@ XML-RPC. The trust assumptions:
 ## Reporting a vulnerability
 
 **Do not open a public GitHub issue for security bugs.** Email
-`nekanat.stock@gmail.com` (or DM the maintainer on the platform where
+`yuri.schmaltz@gmail.com` (or DM the maintainer on the platform where
 you first found the project) with:
 
 - A description of the bug and the impact you can demonstrate.

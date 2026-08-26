@@ -77,10 +77,31 @@ def add_screenshot_if_available(
     response: ToolResponse,
     screenshot: str | None,
     only_text_feedback: bool,
+    image_format: str = "png",
 ) -> ToolResponse:
+    """Append a screenshot to *response* unless text-only feedback is on.
+
+    The screenshot is appended as a single :class:`ImageContent`. The
+    ``mimeType`` is derived from *image_format* (``"png"`` → ``image/png``,
+    ``"jpeg"``/``"jpg"`` → ``image/jpeg``, ``"webp"`` → ``image/webp``);
+    any other value falls back to ``image/png`` for backward compatibility.
+
+    Why pass ``image_format`` instead of inferring from the bytes?
+    XML-RPC moves the screenshot as base64, which loses the original
+    container's magic bytes. The caller already knows the format it
+    requested, so passing it in is the only reliable way to surface
+    JPEG/WebP correctly to MCP clients that honour the mime type.
+    """
     if only_text_feedback or screenshot is None:
         return response
-    return [*response, ImageContent(type="image", data=screenshot, mimeType="image/png")]
+    fmt = (image_format or "png").lower()
+    mime = {
+        "png": "image/png",
+        "jpeg": "image/jpeg",
+        "jpg": "image/jpeg",
+        "webp": "image/webp",
+    }.get(fmt, "image/png")
+    return [*response, ImageContent(type="image", data=screenshot, mimeType=mime)]
 
 
 __all__ = [

@@ -13,6 +13,8 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from freecad_mcp.schemas import (  # noqa: E402
+    DocumentName,
+    FreeCADObjectName,
     validate_create_object,
     validate_edit_object,
 )
@@ -194,6 +196,95 @@ def test_create_object_operation_fem_without_analysis_blocked(monkeypatch):
     )
     assert "Invalid create_object" in result[0].text
     assert "analysis_name" in result[0].text.lower()
+
+
+# --- FreeCADObjectName / DocumentName validators ------------------------
+
+
+def test_free_cad_object_name_accepts_valid_string():
+    """FreeCADObjectName is a str subclass that holds validated names."""
+    n = FreeCADObjectName("MyBox")
+    assert str(n) == "MyBox"
+    assert isinstance(n, str)
+
+
+def test_document_name_accepts_valid_string():
+    """DocumentName is a str subclass that holds validated names."""
+    n = DocumentName("MyDoc")
+    assert str(n) == "MyDoc"
+    assert isinstance(n, str)
+
+
+def test_free_cad_object_name_validator_methods_exist():
+    """Even when pydantic doesn't auto-call __get_validators__, the
+    methods are still defined (we keep them for v1 compatibility)."""
+    validators = list(FreeCADObjectName.__get_validators__())
+    assert len(validators) == 1
+    # _validate is callable.
+    assert callable(FreeCADObjectName._validate)
+
+
+def test_free_cad_object_name_validate_wraps_string():
+    """Calling _validate on a plain string wraps it in cls(value)."""
+    n = FreeCADObjectName._validate("MyBox")
+    assert isinstance(n, FreeCADObjectName)
+    assert str(n) == "MyBox"
+
+
+def test_free_cad_object_name_validate_rejects_invalid():
+    """Calling _validate directly with a dotted name raises ValueError."""
+    with pytest.raises(ValueError, match="must not contain dots"):
+        FreeCADObjectName._validate("a.b")
+
+
+def test_free_cad_object_name_validate_idempotent():
+    """If we already have a FreeCADObjectName, validation is a no-op."""
+    n1 = FreeCADObjectName("MyBox")
+    assert FreeCADObjectName._validate(n1) is n1
+
+
+def test_document_name_validator_methods_exist():
+    validators = list(DocumentName.__get_validators__())
+    assert len(validators) == 1
+
+
+def test_document_name_validate_rejects_invalid():
+    with pytest.raises(ValueError, match="must not contain dots"):
+        DocumentName._validate("a.b")
+
+
+def test_document_name_validate_idempotent():
+    n1 = DocumentName("MyDoc")
+    assert DocumentName._validate(n1) is n1
+
+
+def test_document_name_validate_wraps_string():
+    n = DocumentName._validate("MyDoc")
+    assert isinstance(n, DocumentName)
+    assert str(n) == "MyDoc"
+
+
+# --- _validate_free_cad_name direct ------------------------------------
+
+
+def test_validate_free_cad_name_rejects_non_string():
+    from freecad_mcp.schemas import _validate_free_cad_name
+    with pytest.raises(ValueError, match="non-empty"):
+        _validate_free_cad_name(None)  # type: ignore[arg-type]
+
+
+def test_create_object_warns_on_unknown_obj_type_prefix(caplog):
+    """obj_type prefixes outside the allowlist log a warning but the
+    request still passes validation (FreeCAD is the source of truth)."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="freecad_mcp.schemas"):
+        req = validate_create_object({
+            "doc_name": "MyDoc",
+            "obj_name": "X",
+            "obj_type": "Unknown::Foo",
+        })
+    assert req.obj_type == "Unknown::Foo"
+    assert any("Unknown::Foo" in r.message for r in caplog.records)
 
 
 if __name__ == "__main__":

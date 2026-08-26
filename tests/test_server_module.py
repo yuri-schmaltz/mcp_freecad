@@ -168,6 +168,132 @@ def test_validate_host_rejects_garbage():
         raise AssertionError(f"expected ArgumentTypeError for {bad!r}")
 
 
+# ---------------------------------------------------------------------------
+# get_freecad_connection / server_lifespan
+# ---------------------------------------------------------------------------
+
+
+def test_get_freecad_connection_creates_when_none():
+    """First call constructs a FreeCADConnection and pings."""
+    import freecad_mcp.server as srv
+
+    class _FakeConn:
+        def __init__(self, host, port):
+            self.host = host
+            self.port = port
+        def ping(self):
+            return True
+
+    saved_state_conn = srv.state.freecad_connection
+    saved_state_host = srv.state.rpc_host
+    saved_fc_cls = srv.FreeCADConnection
+    srv.state.freecad_connection = None
+    srv.state.rpc_host = "127.0.0.1"
+    srv.FreeCADConnection = _FakeConn
+    try:
+        conn = srv.get_freecad_connection()
+        assert isinstance(conn, _FakeConn)
+        # Second call returns the cached one (no new instance).
+        conn2 = srv.get_freecad_connection()
+        assert conn2 is conn
+    finally:
+        srv.state.freecad_connection = saved_state_conn
+        srv.state.rpc_host = saved_state_host
+        srv.FreeCADConnection = saved_fc_cls
+
+
+def test_get_freecad_connection_raises_on_ping_failure():
+    """If the first ping fails, get_freecad_connection raises."""
+    import freecad_mcp.server as srv
+
+    class _FakeConn:
+        def __init__(self, host, port):
+            pass
+        def ping(self):
+            return False
+
+    saved_state_conn = srv.state.freecad_connection
+    saved_fc_cls = srv.FreeCADConnection
+    srv.state.freecad_connection = None
+    srv.FreeCADConnection = _FakeConn
+    try:
+        import pytest
+        with pytest.raises(Exception, match="Failed to connect"):
+            srv.get_freecad_connection()
+        # And the state was cleared so the next call retries.
+        assert srv.state.freecad_connection is None
+    finally:
+        srv.state.freecad_connection = saved_state_conn
+        srv.FreeCADConnection = saved_fc_cls
+
+
+def test_server_lifespan_handles_startup_ping_failure(caplog):
+    """server_lifespan logs a warning when the initial ping fails but
+    still yields (so the server can start in degraded mode)."""
+    import asyncio
+    import logging
+    import freecad_mcp.server as srv
+
+    class _FakeConn:
+        def __init__(self, host, port):
+            pass
+        def ping(self):
+            return False
+        def disconnect(self):
+            pass
+
+    saved_state_conn = srv.state.freecad_connection
+    saved_state_host = srv.state.rpc_host
+    saved_fc_cls = srv.FreeCADConnection
+    srv.state.freecad_connection = None
+    srv.state.rpc_host = "127.0.0.1"
+    srv.FreeCADConnection = _FakeConn
+
+    with caplog.at_level(logging.WARNING, logger="FreeCADMCPserver"):
+        async def _drive():
+            async with srv.server_lifespan(None):  # type: ignore[arg-type]
+                return "ok"
+        result = asyncio.run(_drive())
+    assert result == "ok"
+    assert any("Could not connect" in r.message for r in caplog.records)
+
+    srv.state.freecad_connection = saved_state_conn
+    srv.state.rpc_host = saved_state_host
+    srv.FreeCADConnection = saved_fc_cls
+
+
+def test_server_lifespan_disconnects_on_shutdown():
+    """When a connection is alive at shutdown, server_lifespan disconnects it."""
+    import asyncio
+    import freecad_mcp.server as srv
+
+    disconnected = []
+
+    class _FakeConn:
+        def disconnect(self):
+            disconnected.append(True)
+
+    saved_state_conn = srv.state.freecad_connection
+    # We don't want to actually call FreeCADConnection (or ping) on entry —
+    # so pre-populate the connection and stub the class out.
+    srv.state.freecad_connection = _FakeConn()
+    saved_fc_cls = srv.FreeCADConnection
+    srv.FreeCADConnection = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("should not be called")
+    )
+
+    async def _drive():
+        async with srv.server_lifespan(None):  # type: ignore[arg-type]
+            return "ok"
+    asyncio.run(_drive())
+
+    assert disconnected == [True]
+    assert srv.state.freecad_connection is None
+
+    srv.state.freecad_connection = saved_state_conn
+    srv.FreeCADConnection = saved_fc_cls
+
+
 if __name__ == "__main__":
     test_configure_logging_idempotent()
     test_load_system_directives_fallback_when_missing()

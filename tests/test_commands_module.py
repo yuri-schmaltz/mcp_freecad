@@ -467,7 +467,132 @@ def test_toggle_auto_start_is_active():
 
 def test_sync_toggle_states_no_freecadgui_no_op():
     """If FreeCADGui is not importable, the helper silently returns."""
-    commands._sync_toggle_states()
+    # Force the `import FreeCADGui` inside the helper to fail.
+    real_freecadgui = sys.modules["FreeCADGui"]
+    sys.modules["FreeCADGui"] = None  # type: ignore[assignment]
+    try:
+        commands._sync_toggle_states()
+    finally:
+        sys.modules["FreeCADGui"] = real_freecadgui
+
+
+# ---------------------------------------------------------------------------
+# QtWidgets-missing fallback paths
+# ---------------------------------------------------------------------------
+
+
+def test_toggle_remote_qtwidgets_missing_logs_and_returns():
+    """When PySide.QtWidgets is missing, the security-gate refusal path
+    logs the error instead of crashing."""
+    real_load = commands.load_settings
+    real_save = commands.save_settings
+    commands.load_settings = lambda: {"remote_enabled": False, "allowed_ips": "127.0.0.1"}
+    commands.save_settings = lambda s: None
+    os_mod = sys.modules["os"]
+    saved_env = {}
+    for var in ("FREECAD_MCP_TLS_CERT", "FREECAD_MCP_TLS_KEY", "FREECAD_MCP_AUTH_TOKEN"):
+        saved_env[var] = os_mod.environ.pop(var, None)
+    # Delete the QtWidgets attribute so ``from PySide import QtWidgets``
+    # raises ImportError.
+    saved_widgets = sys.modules["PySide"].__dict__.pop("QtWidgets", None)
+    try:
+        # Should not raise even though QtWidgets is missing.
+        commands.ToggleRemoteConnectionsCommand().Activated(checked=1)
+    finally:
+        if saved_widgets is not None:
+            sys.modules["PySide"].QtWidgets = saved_widgets
+        for var, val in saved_env.items():
+            if val is not None:
+                os_mod.environ[var] = val
+        commands.load_settings = real_load
+        commands.save_settings = real_save
+
+
+def test_toggle_remote_notifies_when_server_running():
+    """When the RPC server is already running, toggling remote prints a
+    'restart needed' hint."""
+    real_load = commands.load_settings
+    real_save = commands.save_settings
+    commands.load_settings = lambda: {"remote_enabled": True, "allowed_ips": "127.0.0.1"}
+    commands.save_settings = lambda s: None
+    real_instance = commands.rpc_server_instance
+    commands.rpc_server_instance = object()  # any truthy value
+    try:
+        # Toggle off (checked=0).
+        commands.ToggleRemoteConnectionsCommand().Activated(checked=0)
+    finally:
+        commands.rpc_server_instance = real_instance
+        commands.load_settings = real_load
+        commands.save_settings = real_save
+
+
+def test_configure_allowed_ips_qtwidgets_missing_returns():
+    """ConfigureAllowedIPs with no QtWidgets falls through the dialog
+    and returns silently."""
+    real_load = commands.load_settings
+    real_save = commands.save_settings
+    commands.load_settings = lambda: {"allowed_ips": "127.0.0.1"}
+    commands.save_settings = lambda s: None
+    saved_widgets = sys.modules["PySide"].__dict__.pop("QtWidgets", None)
+    try:
+        commands.ConfigureAllowedIPsCommand().Activated()
+    finally:
+        if saved_widgets is not None:
+            sys.modules["PySide"].QtWidgets = saved_widgets
+        commands.load_settings = real_load
+        commands.save_settings = real_save
+
+
+def test_configure_allowed_ips_notifies_when_server_running():
+    """When the RPC server is already running and IPs change, print a
+    'restart needed' hint."""
+    real_load = commands.load_settings
+    real_save = commands.save_settings
+    commands.load_settings = lambda: {"allowed_ips": "127.0.0.1"}
+    commands.save_settings = lambda s: None
+    saved_widgets = sys.modules["PySide"].QtWidgets
+    sys.modules["PySide"].QtWidgets = types.SimpleNamespace(
+        QApplication=type("QApplication", (), {"instance": staticmethod(lambda: None)}),
+        QInputDialog=types.SimpleNamespace(
+            Normal=0,
+            getText=lambda *a, **kw: ("10.0.0.0/24", True),
+        ),
+        QLineEdit=types.SimpleNamespace(Normal=0),
+        QMessageBox=types.SimpleNamespace(warning=lambda *a, **kw: None),
+    )
+    real_instance = commands.rpc_server_instance
+    commands.rpc_server_instance = object()
+    try:
+        commands.ConfigureAllowedIPsCommand().Activated()
+    finally:
+        commands.rpc_server_instance = real_instance
+        sys.modules["PySide"].QtWidgets = saved_widgets
+        commands.load_settings = real_load
+        commands.save_settings = real_save
+
+
+def test_toggle_auto_start_qtwidgets_missing_logs_and_returns():
+    """Auto-start with PySide.QtWidgets missing logs the error and
+    refuses to enable remote."""
+    real_load = commands.load_settings
+    real_save = commands.save_settings
+    commands.load_settings = lambda: {"auto_start_rpc": False}
+    commands.save_settings = lambda s: None
+    os_mod = sys.modules["os"]
+    saved_env = {}
+    for var in ("FREECAD_MCP_TLS_CERT", "FREECAD_MCP_TLS_KEY", "FREECAD_MCP_AUTH_TOKEN"):
+        saved_env[var] = os_mod.environ.pop(var, None)
+    saved_widgets = sys.modules["PySide"].__dict__.pop("QtWidgets", None)
+    try:
+        commands.ToggleAutoStartCommand().Activated(checked=1)
+    finally:
+        if saved_widgets is not None:
+            sys.modules["PySide"].QtWidgets = saved_widgets
+        for var, val in saved_env.items():
+            if val is not None:
+                os_mod.environ[var] = val
+        commands.load_settings = real_load
+        commands.save_settings = real_save
 
 
 def test_sync_toggle_states_with_qt_runs_sync():

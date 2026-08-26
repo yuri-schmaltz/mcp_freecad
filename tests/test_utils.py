@@ -58,6 +58,27 @@ def test_safe_operation_passes_through_on_success(monkeypatch):
     assert r == "fine"
 
 
+def test_safe_operation_fallback_when_text_response_raises(monkeypatch):
+    """If text_response itself fails inside the wrapper, fall back to a
+    minimal dict-shaped response."""
+    _ensure_prefix_off(monkeypatch)
+
+    def _exploding_text_response(message):
+        raise RuntimeError("text_response broken")
+
+    # Monkey-patch the text_response imported into utils.
+    import freecad_mcp.utils as utils_mod
+    saved = utils_mod.text_response
+    utils_mod.text_response = _exploding_text_response
+    try:
+        r = boom()
+    finally:
+        utils_mod.text_response = saved
+    assert len(r) == 1
+    assert r[0]["type"] == "text"
+    assert "Internal error" in r[0]["text"]
+
+
 if __name__ == "__main__":
     test_safe_operation_returns_text_on_exception(None)  # type: ignore[arg-type]
     test_safe_operation_passes_through_on_success(None)  # type: ignore[arg-type]

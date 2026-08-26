@@ -208,6 +208,84 @@ def test_env_threshold(monkeypatch):
     assert cb.threshold == 5
 
 
+def test_env_threshold_invalid_value_falls_back(monkeypatch):
+    """Non-integer FREECAD_MCP_CB_THRESHOLD falls back to default."""
+    from src.freecad_mcp.circuit_breaker import _env_int
+    monkeypatch.setenv("FREECAD_MCP_CB_THRESHOLD", "not-a-number")
+    assert _env_int("FREECAD_MCP_CB_THRESHOLD", 7) == 7
+
+
+def test_env_threshold_zero_or_negative_falls_back(monkeypatch):
+    """Zero/negative thresholds are rejected (must be > 0)."""
+    from src.freecad_mcp.circuit_breaker import _env_int
+    monkeypatch.setenv("FREECAD_MCP_CB_THRESHOLD", "0")
+    assert _env_int("FREECAD_MCP_CB_THRESHOLD", 7) == 7
+    monkeypatch.setenv("FREECAD_MCP_CB_THRESHOLD", "-3")
+    assert _env_int("FREECAD_MCP_CB_THRESHOLD", 7) == 7
+
+
+def test_env_reset_invalid_value_falls_back(monkeypatch):
+    """Non-float FREECAD_MCP_CB_RESET_S falls back to default."""
+    from src.freecad_mcp.circuit_breaker import _env_float
+    monkeypatch.setenv("FREECAD_MCP_CB_RESET_S", "abc")
+    assert _env_float("FREECAD_MCP_CB_RESET_S", 30.0) == 30.0
+
+
+def test_env_reset_zero_or_negative_falls_back(monkeypatch):
+    """Zero/negative reset windows are rejected."""
+    from src.freecad_mcp.circuit_breaker import _env_float
+    monkeypatch.setenv("FREECAD_MCP_CB_RESET_S", "0")
+    assert _env_float("FREECAD_MCP_CB_RESET_S", 30.0) == 30.0
+    monkeypatch.setenv("FREECAD_MCP_CB_RESET_S", "-1.5")
+    assert _env_float("FREECAD_MCP_CB_RESET_S", 30.0) == 30.0
+
+
+def test_breaker_decorator_passes_args_and_result():
+    """The @breaker decorator routes through .call and returns the value."""
+    cb = CircuitBreaker(sleep=_no_sleep)
+
+    @cb
+    def add(a, b):
+        return a + b
+
+    assert add(2, 3) == 5
+    m = cb.metrics()
+    assert m["total_calls"] == 1
+    assert m["total_failures"] == 0
+
+
+def test_breaker_decorator_propagates_transient_exceptions():
+    """The decorator surfaces transient exceptions and counts failures."""
+    cb = CircuitBreaker(sleep=_no_sleep, threshold=10, retry_max=0)
+
+    @cb
+    def boom():
+        raise ConnectionRefusedError("nope")
+
+    import pytest
+    with pytest.raises(ConnectionRefusedError, match="nope"):
+        boom()
+    m = cb.metrics()
+    assert m["total_failures"] == 1
+
+
+def test_breaker_decorator_propagates_non_transient_without_counting():
+    """Non-transient exceptions propagate immediately and don't count
+    toward the breaker failure tally (they're caller bugs, not
+    transport issues)."""
+    cb = CircuitBreaker(sleep=_no_sleep, threshold=10)
+
+    @cb
+    def boom():
+        raise ValueError("nope")
+
+    import pytest
+    with pytest.raises(ValueError, match="nope"):
+        boom()
+    m = cb.metrics()
+    assert m["total_failures"] == 0
+
+
 if __name__ == "__main__":
     import sys
     print("Run with pytest; direct invocation is not supported.")

@@ -121,6 +121,55 @@ def test_symlink_escape_rejected():
     raise AssertionError("expected ValueError for symlink escape")
 
 
+# ---------------------------------------------------------------------------
+# _safe_mtime / insert_part_from_library
+# ---------------------------------------------------------------------------
+
+
+def test_safe_mtime_returns_zero_for_missing_path():
+    """OSError (e.g. ENOENT) is swallowed -> 0.0."""
+    assert _lib._safe_mtime("/nonexistent/path/that/does/not/exist") == 0.0
+
+
+def test_insert_part_from_library_calls_merge_project():
+    """insert_part_from_library resolves the path and calls mergeProject."""
+    tmp = _make_lib_root()
+    # The module joins ``Mod/parts_library`` under getUserAppDataDir().
+    lib = tmp / "Mod" / "parts_library"
+    lib.mkdir(parents=True)
+    (lib / "box.fcstd").write_bytes(b"fake-fcstd-bytes")
+
+    calls: list[str] = []
+
+    def _merge(path):
+        calls.append(path)
+
+    _fcgui.ActiveDocument = types.SimpleNamespace(mergeProject=_merge)
+
+    saved_dir = _fc.getUserAppDataDir
+    _fc.getUserAppDataDir = lambda: str(tmp)
+    try:
+        _lib.insert_part_from_library("box.fcstd")
+        assert len(calls) == 1
+        assert calls[0].endswith(os.path.join("parts_library", "box.fcstd"))
+    finally:
+        _fc.getUserAppDataDir = saved_dir
+        _fcgui.ActiveDocument = None
+
+
+def test_insert_part_from_library_missing_file_raises():
+    """insert_part_from_library raises FileNotFoundError for missing parts."""
+    tmp = _make_lib_root()
+    saved_dir = _fc.getUserAppDataDir
+    _fc.getUserAppDataDir = lambda: str(tmp)
+    try:
+        import pytest
+        with pytest.raises(FileNotFoundError, match="Not found"):
+            _lib.insert_part_from_library("missing.fcstd")
+    finally:
+        _fc.getUserAppDataDir = saved_dir
+
+
 if __name__ == "__main__":
     test_relative_resolves_inside()
     test_nested_relative_resolves_inside()

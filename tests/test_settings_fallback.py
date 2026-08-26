@@ -334,6 +334,74 @@ def test_load_handles_corrupt_file():
         shutil.rmtree(fc_dir, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# _writable_dir / save_settings error paths
+# ---------------------------------------------------------------------------
+
+
+def test_writable_dir_returns_false_on_permission_error(monkeypatch, tmp_path):
+    """When mkstemp raises PermissionError, _writable_dir returns False."""
+    rpc_mod = _load_rpc_server()
+    import tempfile as _tempfile
+    original = _tempfile.mkstemp
+
+    def _boom(*args, **kwargs):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(_tempfile, "mkstemp", _boom)
+    try:
+        assert rpc_mod._writable_dir(str(tmp_path)) is False
+    finally:
+        monkeypatch.setattr(_tempfile, "mkstemp", original)
+
+
+def test_writable_dir_returns_false_on_oserror(monkeypatch, tmp_path):
+    """When mkstemp raises OSError, _writable_dir returns False."""
+    rpc_mod = _load_rpc_server()
+    import tempfile as _tempfile
+    original = _tempfile.mkstemp
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_tempfile, "mkstemp", _boom)
+    try:
+        assert rpc_mod._writable_dir(str(tmp_path)) is False
+    finally:
+        monkeypatch.setattr(_tempfile, "mkstemp", original)
+
+
+def test_save_settings_logs_error_when_write_fails(monkeypatch, tmp_path):
+    """If open() raises during save, save_settings logs to the FreeCAD
+    console and does not propagate."""
+    rpc_mod = _load_rpc_server()
+    fc_dir = str(tmp_path)
+    _fc.getUserAppDataDir = lambda: fc_dir
+
+    printed: list[str] = []
+    _fc.Console = types.SimpleNamespace(
+        PrintError=lambda *args, **kw: printed.append(args[0] if args else ""),
+        PrintWarning=lambda *a, **k: None,
+        PrintMessage=lambda *a, **k: None,
+    )
+
+    # Patch open to raise — easiest via a builtin swap.
+    import builtins
+    real_open = builtins.open
+
+    def _bad_open(path, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(builtins, "open", _bad_open)
+    try:
+        # Should NOT raise.
+        rpc_mod.save_settings({"remote_enabled": True})
+    finally:
+        monkeypatch.setattr(builtins, "open", real_open)
+
+    assert any("Failed to save" in m for m in printed)
+
+
 if __name__ == "__main__":
     test_writable_dir_true_for_writable()
     test_writable_dir_false_for_nonexistent()

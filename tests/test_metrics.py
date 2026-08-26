@@ -83,6 +83,43 @@ def test_gauge_set_and_read():
     assert g.value() == 7.5
 
 
+def test_gauge_set_rejects_wrong_label_count():
+    import pytest
+    g = Gauge("test_state", "test", labelnames=("foo",))
+    with pytest.raises(ValueError, match="gauge 'test_state' expects 1 labels"):
+        g.set(1)  # no labels
+    with pytest.raises(ValueError, match="got 2"):
+        g.set(1, "a", "b")  # too many
+
+
+def test_histogram_observe_rejects_wrong_label_count():
+    import pytest
+    from src.freecad_mcp.metrics import Histogram
+    h = Histogram("test_h", "test", buckets=(1.0,))
+    with pytest.raises(ValueError, match="histogram 'test_h' expects 0 labels"):
+        h.observe(0.5, "extra")
+
+
+def test_counter_set_rejects_negative():
+    """Counter.set explicitly rejects negative values (use Gauge for signed)."""
+    import pytest
+    from src.freecad_mcp.metrics import Counter
+    c = Counter("test_c", "test")
+    with pytest.raises(ValueError, match="Counter values cannot be negative"):
+        c.set(-1.0)
+    # Positive is allowed.
+    c.set(10.0)
+    assert c.value() == 10.0
+
+
+def test_counter_set_rejects_wrong_label_count():
+    import pytest
+    from src.freecad_mcp.metrics import Counter
+    c = Counter("test_c", "test", labelnames=("op",))
+    with pytest.raises(ValueError, match="counter 'test_c' expects 1 labels"):
+        c.set(1)
+
+
 # --- Registry + Prometheus output ---------------------------------------
 
 def test_registry_has_default_metrics():

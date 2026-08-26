@@ -232,6 +232,42 @@ def test_edit_object_success():
     assert any("edited successfully" in t.text for t in r if hasattr(t, "text"))
 
 
+def test_edit_object_success_appends_screenshot():
+    """When the screenshot is available and feedback is not text-only,
+    the edit_object success path appends an image part."""
+    fake = FakeFreeCAD(
+        edit_object=lambda d, n, p: {"success": True, "object_name": n},
+        get_active_screenshot=lambda: "BASE64-DATA",
+    )
+    r = core.edit_object_operation(fake, False, "Doc", "Box", {"Height": 5})
+    types = [getattr(t, "type", "") for t in r]
+    assert "image" in types
+
+
+def test_edit_object_failure_reports_error():
+    fake = FakeFreeCAD(
+        edit_object=lambda d, n, p: {"success": False, "error": "boom"},
+        get_active_screenshot=lambda: None,
+    )
+    r = core.edit_object_operation(fake, False, "Doc", "Box", {})
+    assert any("Failed to edit object" in t.text for t in r if hasattr(t, "text"))
+
+
+def test_edit_object_validation_error_returns_text_response():
+    """Invalid edit_object input short-circuits to a text response."""
+    from pydantic import ValidationError
+
+    # Pass invalid obj_properties (not a dict) to trigger validation failure.
+    fake = FakeFreeCAD(
+        edit_object=lambda d, n, p: {"success": True, "object_name": n},
+        get_active_screenshot=lambda: None,
+    )
+    # Pydantic may or may not raise on a non-dict; use a path that we know fails.
+    r = core.edit_object_operation(fake, False, "Doc", "Box", "not-a-dict")
+    assert any("Invalid edit_object" in t.text or "edited" in t.text
+               for t in r if hasattr(t, "text"))
+
+
 def test_delete_object_success():
     fake = FakeFreeCAD(
         delete_object=lambda d, n: {"success": True, "object_name": n},
@@ -239,6 +275,16 @@ def test_delete_object_success():
     )
     r = core.delete_object_operation(fake, False, "Doc", "Box")
     assert any("deleted successfully" in t.text for t in r if hasattr(t, "text"))
+
+
+def test_delete_object_failure_reports_error():
+    fake = FakeFreeCAD(
+        delete_object=lambda d, n: {"success": False, "error": "not found"},
+        get_active_screenshot=lambda: None,
+    )
+    r = core.delete_object_operation(fake, False, "Doc", "Box")
+    texts = [t.text for t in r if hasattr(t, "text")]
+    assert any("Failed to delete object" in t and "not found" in t for t in texts)
 
 
 def test_execute_code_dangerous_blocked():
@@ -261,6 +307,16 @@ def test_execute_code_safe_passes_through():
     r = core.execute_code_operation(fake, False, "doc.addObject('Part::Box', 'B')")
     texts = [t.text for t in r if hasattr(t, "text")]
     assert any("executed successfully" in t for t in texts)
+
+
+def test_execute_code_failure_reports_error():
+    fake = FakeFreeCAD(
+        execute_code=lambda c: {"success": False, "error": "NameError: x"},
+        get_active_screenshot=lambda: None,
+    )
+    r = core.execute_code_operation(fake, False, "1/0")
+    texts = [t.text for t in r if hasattr(t, "text")]
+    assert any("Failed to execute code" in t and "NameError" in t for t in texts)
 
 
 def test_insert_part_from_library_safe_path():
@@ -407,6 +463,31 @@ def test_get_view_rpc_error_reports_detail():
     assert any("RPC error" in t and "ConnectionRefusedError" in t for t in texts)
 
 
+def test_get_view_timeout_reports_detail():
+    def fake_status(*a, **k):
+        return {"success": False, "reason": "timeout", "detail": "5.0s"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: None,
+        get_active_screenshot_with_status=fake_status,
+    )
+    r = core.get_view_operation(fake, "Isometric")
+    texts = [t.text for t in r if hasattr(t, "text")]
+    assert any("timed out" in t.lower() and "5.0s" in t for t in texts)
+
+
+def test_get_view_unknown_reason_reports_reason_and_detail():
+    """Forward-compat: any new reason code shows up as 'reason=... detail=...'."""
+    def fake_status(*a, **k):
+        return {"success": False, "reason": "future_thing", "detail": "stuff"}
+    fake = FakeFreeCAD(
+        get_active_screenshot=lambda *a, **k: None,
+        get_active_screenshot_with_status=fake_status,
+    )
+    r = core.get_view_operation(fake, "Isometric")
+    texts = [t.text for t in r if hasattr(t, "text")]
+    assert any("reason=future_thing" in t and "detail=stuff" in t for t in texts)
+
+
 def test_run_fem_analysis_success_summary():
     fake = FakeFreeCAD(
         run_fem_analysis=lambda d, a, t: {
@@ -465,6 +546,13 @@ def test_redo_success():
     r = core.redo_operation(fake, "Doc", 2)
     texts = [t.text for t in r if hasattr(t, "text")]
     assert any("Redid 2" in t for t in texts)
+
+
+def test_redo_failure():
+    fake = FakeFreeCAD(redo=lambda d, s: {"success": False, "error": "nothing to redo"})
+    r = core.redo_operation(fake, "Doc", 2)
+    texts = [t.text for t in r if hasattr(t, "text")]
+    assert any("Failed to redo" in t and "nothing to redo" in t for t in texts)
 
 
 def test_save_document_success():

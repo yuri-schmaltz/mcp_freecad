@@ -82,6 +82,33 @@ def test_json_formatter_handles_non_json_extras():
     assert rec["obj"] == "<opaque>"
 
 
+def test_json_formatter_handles_list_and_tuple_extras():
+    """Lists and tuples are recursed element-by-element."""
+    rec = _capture_log(JsonLogFormatter(), msg="x", extra={
+        "items_list": [1, 2, "three"],
+        "items_tuple": (1, 2, "three"),
+    })
+    assert rec["items_list"] == [1, 2, "three"]
+    assert rec["items_tuple"] == [1, 2, "three"]
+
+
+def test_json_formatter_handles_dict_extras():
+    """MutableMapping extras are coerced to {str(k): ...}."""
+    from collections import UserDict
+    rec = _capture_log(JsonLogFormatter(), msg="x", extra={
+        "meta": UserDict({"a": 1, "b": "two"}),
+    })
+    assert rec["meta"] == {"a": 1, "b": "two"}
+
+
+def test_json_formatter_extras_dont_shadow_standard_fields():
+    """User-supplied extras that conflict with standard fields are ignored
+    so the structured fields stay authoritative."""
+    rec = _capture_log(JsonLogFormatter(), msg="hello", extra={"level": "FAKE"})
+    # Standard level (INFO/whatever) wins.
+    assert rec["level"] != "FAKE"
+
+
 def test_json_formatter_does_not_leak_logging_internals():
     """Internal LogRecord attributes (e.g. ``args``, ``levelno``) must
     not appear in the output unless explicitly added by the caller.

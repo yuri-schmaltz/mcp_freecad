@@ -77,29 +77,38 @@ def _load_rpc_server():
     return mod
 
 
-# A 1x1 white PNG, used to exercise the transcoding path.
-_TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xfc\xff"
-    b"\xff?\x00\x05\xfe\x02\xfe\xa3z\xd1\xc0\x00\x00\x00\x00IEND\xaeB`\x82"
-)
+# A 4x4 red PNG, used to exercise the transcoding path. Built once at
+# import time so we don't pay the Pillow cost on every test.
+import io as _io
+from PIL import Image as _Image
+_buf = _io.BytesIO()
+_Image.new("RGB", (4, 4), "red").save(_buf, format="PNG")
+_TINY_PNG = _buf.getvalue()
 
 
 def test_transcode_returns_none_when_pillow_missing():
-    """If Pillow is not importable, transcoding returns None."""
+    """If Pillow is not importable, transcoding returns None.
+
+    We patch ``__import__`` rather than popping PIL from ``sys.modules``
+    because popping breaks Pillow's plugin registry (the PNG/WebP/JPEG
+    plugins are not re-registered on re-import).
+    """
     rpc_mod = _load_rpc_server()
-    # Force the Pillow import inside _transcode_screenshot to fail.
-    saved_pil = sys.modules.pop("PIL", None)
-    saved_pil_image = sys.modules.pop("PIL.Image", None)
+    import builtins
+    sentinel = ImportError("simulated missing Pillow")
+
+    def _raiser(name, *args, **kwargs):
+        if name == "PIL" or name.startswith("PIL."):
+            raise sentinel
+        return builtins.__import__(name, *args, **kwargs)
+
+    real_import = builtins.__import__
+    builtins.__import__ = _raiser
     try:
         result = rpc_mod._transcode_screenshot(_TINY_PNG, "jpeg")
-        # No Pillow -> None
         assert result is None
     finally:
-        if saved_pil is not None:
-            sys.modules["PIL"] = saved_pil
-        if saved_pil_image is not None:
-            sys.modules["PIL.Image"] = saved_pil_image
+        builtins.__import__ = real_import
 
 
 def test_transcode_unknown_format_returns_none():

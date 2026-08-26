@@ -39,6 +39,30 @@ def test_text_response_does_not_double_prefix():
     assert msg.count(SYSTEM_DIRECTIVE_PREFIX) == 0
 
 
+def test_text_response_idempotent_when_already_prefixed():
+    """With prefix enabled, a message that already starts with the
+    directive is returned unchanged (no double prefix)."""
+    import os
+    saved_load = os.environ.get("FREECAD_MCP_LOAD_GABARITO")
+    saved_no = os.environ.get("FREECAD_MCP_NO_DIRECTIVE_PREFIX")
+    try:
+        os.environ["FREECAD_MCP_LOAD_GABARITO"] = "1"
+        responses_mod = _reload_responses()
+        prefixed = SYSTEM_DIRECTIVE_PREFIX + "\n\nhello"
+        out = responses_mod.text_response(prefixed)
+        assert out[0].text == prefixed
+        # No double prefix.
+        assert out[0].text.count(SYSTEM_DIRECTIVE_PREFIX) == 1
+    finally:
+        if saved_load is None:
+            os.environ.pop("FREECAD_MCP_LOAD_GABARITO", None)
+        else:
+            os.environ["FREECAD_MCP_LOAD_GABARITO"] = saved_load
+        if saved_no is not None:
+            os.environ["FREECAD_MCP_NO_DIRECTIVE_PREFIX"] = saved_no
+        _reload_responses()
+
+
 def test_json_response_serialises_dict():
     r = json_response({"a": 1, "b": [1, 2]})
     import json as _json

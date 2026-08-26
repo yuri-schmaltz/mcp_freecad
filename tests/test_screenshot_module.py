@@ -44,11 +44,25 @@ sys.modules["_test_screenshot_pkg._screenshot"] = mod
 spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
 
-_TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xfc\xff"
-    b"\xff?\x00\x05\xfe\x02\xfe\xa3z\xd1\xc0\x00\x00\x00\x00IEND\xaeB`\x82"
-)
+def _make_tiny_png():
+    """Build a minimal valid 1x1 PNG via Pillow (or fall back to a known-good byte string)."""
+    try:
+        from PIL import Image
+        import io
+        img = Image.new("RGB", (4, 4), "red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        # Hard-coded 1x1 PNG fallback (works in Pillow >=9).
+        return (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0"
+            b"\x00\x00\x00\x03\x00\x01\xb6\xad\xe6\xdc\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+
+
+_TINY_PNG = _make_tiny_png()
 
 
 # ---------------------------------------------------------------------------
@@ -56,17 +70,38 @@ _TINY_PNG = (
 # ---------------------------------------------------------------------------
 
 def test_transcode_no_pillow_returns_none():
-    """When Pillow is not importable, transcoding returns None."""
-    saved_pil = sys.modules.pop("PIL", None)
-    saved_pil_image = sys.modules.pop("PIL.Image", None)
+    """When Pillow is not importable, transcoding returns None.
+
+    We can't pop PIL from ``sys.modules`` because that destroys
+    Pillow's plugin registry (PNG / WebP / JPEG plugins are not
+    re-registered on re-import). Instead we patch the helper's
+    ``from PIL import Image`` to raise ImportError.
+    """
+    import importlib
+    sentinel = ImportError("simulated missing Pillow")
+    # Patch the helper module so the import inside ``transcode_to_format``
+    # raises. We swap the local ``PIL`` and ``PIL.Image`` to stubs that
+    # raise on attribute access.
+    real_pil = sys.modules.get("PIL")
+    real_pil_image = sys.modules.get("PIL.Image")
+
+    def _raiser(name, *args, **kwargs):
+        if name in ("PIL", "PIL.Image"):
+            raise sentinel
+        return importlib.import_module(name, *args, **kwargs)
+
+    import builtins
+    real_import = builtins.__import__
+    builtins.__import__ = _raiser
     try:
         assert mod.transcode_to_format(_TINY_PNG, "jpeg") is None
         assert mod.transcode_to_format(_TINY_PNG, "webp") is None
     finally:
-        if saved_pil is not None:
-            sys.modules["PIL"] = saved_pil
-        if saved_pil_image is not None:
-            sys.modules["PIL.Image"] = saved_pil_image
+        builtins.__import__ = real_import
+        if real_pil is not None:
+            sys.modules["PIL"] = real_pil
+        if real_pil_image is not None:
+            sys.modules["PIL.Image"] = real_pil_image
 
 
 # ---------------------------------------------------------------------------

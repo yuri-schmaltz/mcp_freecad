@@ -201,6 +201,157 @@ def test_screenshot_legacy_returns_none_on_no_capture():
     assert conn.get_active_screenshot() is None
 
 
+# ---------------------------------------------------------------------------
+# Thin server wrappers
+# ---------------------------------------------------------------------------
+
+
+class _RecordingServer:
+    """Mock server that records every method call and returns a fixed value."""
+
+    def __init__(self, return_value):
+        self.return_value = return_value
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def __getattr__(self, name):
+        def _call(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return self.return_value
+        return _call
+
+
+def _conn_with_recording_server(value):
+    conn = fc.FreeCADConnection.__new__(fc.FreeCADConnection)
+    conn.timeout = 0.5
+    conn.breaker = fc.CircuitBreaker()
+    conn.server = _RecordingServer(value)
+    return conn
+
+
+def test_ping_returns_server_value():
+    conn = _conn_with_recording_server(True)
+    assert conn.ping() is True
+    assert conn.server.calls == [("ping", (), {})]
+
+
+def test_cancel_request_passes_id():
+    conn = _conn_with_recording_server({"cancelled": True})
+    assert conn.cancel_request("REQ-1") == {"cancelled": True}
+    assert conn.server.calls == [("cancel_request", ("REQ-1",), {})]
+
+
+def test_cancel_all_pending_requests():
+    conn = _conn_with_recording_server({"all": 3})
+    assert conn.cancel_all_pending_requests() == {"all": 3}
+    assert conn.server.calls[0][0] == "cancel_all_pending_requests"
+
+
+def test_invalidate_idempotency_cache():
+    conn = _conn_with_recording_server({"invalidated": 7})
+    assert conn.invalidate_idempotency_cache() == {"invalidated": 7}
+    assert conn.server.calls[0][0] == "invalidate_idempotency_cache"
+
+
+def test_create_document_passes_name_and_id():
+    conn = _conn_with_recording_server({"ok": True})
+    assert conn.create_document("Doc1", "REQ-1") == {"ok": True}
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "create_document"
+    assert args == ("Doc1", "REQ-1")
+
+
+def test_create_object_passes_doc_and_data_and_id():
+    conn = _conn_with_recording_server({"ok": True})
+    data = {"name": "Box", "type": "Part::Box"}
+    conn.create_object("Doc1", data, "REQ-2")
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "create_object"
+    assert args == ("Doc1", data, "REQ-2")
+
+
+def test_edit_object_passes_all_args():
+    conn = _conn_with_recording_server({"ok": True})
+    data = {"x": 1}
+    conn.edit_object("Doc1", "Box", data, "REQ-3")
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "edit_object"
+    assert args == ("Doc1", "Box", data, "REQ-3")
+
+
+def test_delete_object_passes_doc_and_name():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.delete_object("Doc1", "Box")
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "delete_object"
+    assert args == ("Doc1", "Box", None)
+
+
+def test_insert_part_from_library():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.insert_part_from_library("parts/box.fcstd")
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "insert_part_from_library"
+    assert args == ("parts/box.fcstd", None)
+
+
+def test_execute_code_passes_code_and_id():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.execute_code("FreeCAD.newDocument('X')", "REQ-4")
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "execute_code"
+    assert args == ("FreeCAD.newDocument('X')", "REQ-4")
+
+
+def test_get_objects_returns_list():
+    conn = _conn_with_recording_server([{"name": "Box"}])
+    assert conn.get_objects("Doc1") == [{"name": "Box"}]
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "get_objects"
+    assert args == ("Doc1",)
+
+
+def test_get_object_returns_dict():
+    conn = _conn_with_recording_server({"name": "Box"})
+    assert conn.get_object("Doc1", "Box") == {"name": "Box"}
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "get_object"
+    assert args == ("Doc1", "Box")
+
+
+def test_get_parts_list_returns_list():
+    conn = _conn_with_recording_server(["part1", "part2"])
+    assert conn.get_parts_list() == ["part1", "part2"]
+    assert conn.server.calls[0][0] == "get_parts_list"
+
+
+def test_list_documents_returns_list():
+    conn = _conn_with_recording_server(["Doc1", "Doc2"])
+    assert conn.list_documents() == ["Doc1", "Doc2"]
+    assert conn.server.calls[0][0] == "list_documents"
+
+
+def test_run_fem_analysis_passes_timeout():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.run_fem_analysis("Doc1", "Analysis", timeout=120)
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "run_fem_analysis"
+    assert args == ("Doc1", "Analysis", 120, None)
+
+
+def test_health_check():
+    conn = _conn_with_recording_server({"healthy": True})
+    assert conn.health_check() == {"healthy": True}
+    assert conn.server.calls[0][0] == "health_check"
+
+
+def test_undo_passes_steps():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.undo("Doc1", steps=3)
+    name, args, kwargs = conn.server.calls[0]
+    assert name == "undo"
+    assert args == ("Doc1", 3)
+
+
 if __name__ == "__main__":
     test_default_timeout_from_env()
     test_timeout_transport_uses_timeout()

@@ -18,8 +18,10 @@ What is covered here:
 - _timeout_for precedence rules
 """
 import importlib.util
+import io
 import os
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -48,6 +50,20 @@ _fc.Rotation = type("Rotation", (), {})
 _fc.Placement = type("Placement", (), {})
 
 
+# A tiny valid PNG (4x4 red), built once for saveImage to write.
+def _tiny_png_bytes():
+    try:
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), "red").save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+
+
+_TINY_PNG = _tiny_png_bytes()
+
+
 class _FakeActiveDoc:
     """Just enough to satisfy ``_save_active_screenshot`` and friends."""
 
@@ -70,7 +86,11 @@ class _FakeView:
     def viewDimetric(self):   self._calls.append("dimetric")
     def viewTrimetric(self):  self._calls.append("trimetric")
     def fitAll(self):         self._calls.append("fitAll")
-    def saveImage(self, *a, **kw): self._calls.append(("saveImage", a, kw))
+    def saveImage(self, path, *a, **kw):
+        # Write a tiny valid PNG so the screenshot base64-encode path works.
+        self._calls.append(("saveImage", (path,) + a, kw))
+        with open(path, "wb") as f:
+            f.write(_TINY_PNG)
     def getSize(self):        return (800, 600)
 
 
@@ -83,6 +103,7 @@ sys.modules["FreeCADGui"].addCommand = lambda *a, **k: None
 sys.modules["FreeCADGui"].getMainWindow = lambda: types.SimpleNamespace(
     findChildren=lambda *a, **k: []
 )
+sys.modules["FreeCADGui"].updateGui = lambda: None
 
 sys.modules["PySide"].QtCore = types.SimpleNamespace(
     QTimer=types.SimpleNamespace(singleShot=lambda *a, **k: None),
@@ -198,6 +219,162 @@ def test_timeout_for_unknown_op_falls_back_to_default():
 def test_timeout_for_override_wins():
     rpc = rpc_server.FreeCADRPC()
     assert rpc._timeout_for("create_object", override=999) == 999
+
+
+# ---------------------------------------------------------------------------
+# get_active_screenshot
+# ---------------------------------------------------------------------------
+
+
+def test_get_active_screenshot_png_happy_path():
+    """Successful capture returns a base64-encoded string."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    try:
+        encoded = rpc.get_active_screenshot(view_name="Isometric", timeout=5.0)
+        assert encoded is not None
+        import base64
+        decoded = base64.b64decode(encoded)
+        assert decoded.startswith(b"\x89PNG")
+    finally:
+        pump.shutdown()
+
+
+def test_get_active_screenshot_jpeg_happy_path():
+    """JPEG path uses Pillow to transcode."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    try:
+        try:
+            from PIL import Image  # noqa: F401 — capability check
+        except Exception:
+            import pytest
+            pytest.skip("Pillow not installed")
+        encoded = rpc.get_active_screenshot(view_name="Isometric", image_format="jpeg")
+        assert encoded is not None
+        import base64
+        decoded = base64.b64decode(encoded)
+        # JPEG magic.
+        assert decoded[:3] == b"\xff\xd8\xff"
+    finally:
+        pump.shutdown()
+
+
+def test_get_active_screenshot_invalid_format_returns_none():
+    """Unknown image format returns None without going through the queue."""
+    rpc = rpc_server.FreeCADRPC()
+    assert rpc.get_active_screenshot(image_format="tiff") is None
+
+
+def test_get_active_screenshot_no_active_view_returns_none():
+    """When the active view is None, the helper returns None."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    saved_view = sys.modules["FreeCADGui"].ActiveDocument.ActiveView
+    sys.modules["FreeCADGui"].ActiveDocument.ActiveView = None
+    try:
+        assert rpc.get_active_screenshot(view_name="Isometric") is None
+    finally:
+        sys.modules["FreeCADGui"].ActiveDocument.ActiveView = saved_view
+        pump.shutdown()
+
+
+def test_get_active_screenshot_view_without_saveimage_returns_none():
+    """If the view lacks saveImage, the helper returns None."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+    saved_view = sys.modules["FreeCADGui"].ActiveDocument.ActiveView
+    sys.modules["FreeCADGui"].ActiveDocument.ActiveView = types.SimpleNamespace()
+    try:
+        assert rpc.get_active_screenshot(view_name="Isometric") is None
+    finally:
+        sys.modules["FreeCADGui"].ActiveDocument.ActiveView = saved_view
+        pump.shutdown()
+
+
+def test_get_active_screenshot_capture_failed_returns_none():
+    """If _save_active_screenshot returns a non-True (e.g. error string),
+    the helper returns None."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+
+    def _bad_save(path, *a, **kw):
+        return "boom"
+
+    pump = _install_pump(rpc_server)
+    saved = rpc_server.FreeCADRPC._save_active_screenshot
+    rpc_server.FreeCADRPC._save_active_screenshot = _bad_save
+    try:
+        assert rpc.get_active_screenshot(view_name="Isometric") is None
+    finally:
+        rpc_server.FreeCADRPC._save_active_screenshot = saved
+        pump.shutdown()
+
+
+def test_get_active_screenshot_exception_in_task_returns_none():
+    """If the task itself raises, the helper returns None."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+
+    saved = sys.modules["FreeCADGui"].ActiveDocument.ActiveView
+    # View raises on every attribute access.
+    class _ExplodingView:
+        def __getattr__(self, name):
+            raise RuntimeError("boom")
+
+    sys.modules["FreeCADGui"].ActiveDocument.ActiveView = _ExplodingView()
+    try:
+        assert rpc.get_active_screenshot(view_name="Isometric") is None
+    finally:
+        sys.modules["FreeCADGui"].ActiveDocument.ActiveView = saved
+        pump.shutdown()
+
+
+def test_get_active_screenshot_queue_timeout_returns_none():
+    """If the GUI thread never responds, the helper returns None."""
+    rpc = rpc_server.FreeCADRPC()
+    # Replace the queue's put with a no-op so no task ever executes, and
+    # the get times out.
+    import queue as _q
+    req_q: _q.Queue = _q.Queue()
+    resp_q: _q.Queue = _q.Queue()
+    saved_put = rpc_server.rpc_request_queue.put
+    saved_get = rpc_server.rpc_response_queue.get
+    rpc_server.rpc_request_queue.put = req_q.put  # type: ignore[assignment]
+    rpc_server.rpc_response_queue.get = lambda timeout=None: (_ for _ in ()).throw(
+        _q.Empty()
+    )
+    try:
+        rpc.TIMEOUT_SCREENSHOT = 0.1  # short
+        assert rpc.get_active_screenshot(view_name="Isometric") is None
+    finally:
+        rpc_server.rpc_request_queue.put = saved_put
+        rpc_server.rpc_response_queue.get = saved_get
+
+
+def test_get_active_screenshot_jpeg_pillow_missing_returns_none():
+    """If Pillow is not installed, JPEG transcode returns None."""
+    _reset_tracker()
+    rpc = rpc_server.FreeCADRPC()
+    pump = _install_pump(rpc_server)
+
+    # Patch the transcode helper to simulate Pillow-missing.
+    from addon.FreeCADMCP.rpc_server import _screenshot as _ss
+    saved_func = _ss.transcode_to_format
+    _ss.transcode_to_format = lambda png_bytes, fmt: None
+    try:
+        # _screenshot is imported into rpc_server namespace too.
+        rpc_server.transcode_to_format = lambda *a, **kw: None
+        assert rpc.get_active_screenshot(view_name="Isometric", image_format="jpeg") is None
+    finally:
+        _ss.transcode_to_format = saved_func
+        rpc_server.transcode_to_format = saved_func
+        pump.shutdown()
 
 
 def test_timeout_for_ignores_zero_and_negative_override():

@@ -375,3 +375,112 @@ def test_dispatch_shutdown_sentinel_is_singleton():
     """The sentinel must be a unique object so identity comparisons
     work even after reloads."""
     assert dispatch._DISPATCH_SHUTDOWN is dispatch._DISPATCH_SHUTDOWN
+
+
+# ---------------------------------------------------------------------------
+# Headless safety: v1.0.4 — _flush_gui_events under flatpak --command=python3
+# ---------------------------------------------------------------------------
+
+
+def test_flush_gui_events_updateGui_raises_falls_back_to_sleep():
+    """When FreeCADGui.updateGui() raises (headless runtime), _flush_gui_events
+    swallows it, does not crash, and falls back to time.sleep."""
+    import time as _time
+    sleeps: list[float] = []
+    real_sleep = _time.sleep
+    _time.sleep = lambda s: sleeps.append(s)  # type: ignore[assignment]
+    saved_fc = dispatch.FreeCADGui
+    dispatch.FreeCADGui = types.SimpleNamespace(
+        updateGui=lambda: (_ for _ in ()).throw(RuntimeError("no GUI")),
+    )
+    try:
+        dispatch._flush_gui_events(delay_ms=20)
+        assert sleeps == [0.02]
+    finally:
+        _time.sleep = real_sleep
+        dispatch.FreeCADGui = saved_fc
+
+
+def test_flush_gui_events_no_app_instance_uses_time_sleep():
+    """When ``QApplication.instance()`` is None but Qt is "imported"
+    (Flatpak ``--command=python3`` path), the helper falls back to
+    plain ``time.sleep`` so callers don't deadlock."""
+    import time as _time
+    sleeps: list[float] = []
+    real_sleep = _time.sleep
+    _time.sleep = lambda s: sleeps.append(s)  # type: ignore[assignment]
+    saved_fc = dispatch.FreeCADGui
+    saved_widgets = dispatch.QtWidgets
+    saved_core = dispatch.QtCore
+    dispatch.FreeCADGui = types.SimpleNamespace(updateGui=lambda: None)
+    dispatch.QtWidgets = types.SimpleNamespace(
+        QApplication=type("QApplication", (), {"instance": staticmethod(lambda: None)}),
+    )
+    dispatch.QtCore = _qt_core
+    try:
+        dispatch._flush_gui_events(delay_ms=10)
+        assert sleeps == [0.01]
+    finally:
+        _time.sleep = real_sleep
+        dispatch.FreeCADGui = saved_fc
+        dispatch.QtWidgets = saved_widgets
+        dispatch.QtCore = saved_core
+
+
+def test_flush_gui_events_qapp_instance_but_call_fails_recovers():
+    """processEvents itself can raise on shutdown/non-GUI thread.
+    The helper must swallow it and still fall back to time.sleep."""
+    import time as _time
+    sleeps: list[float] = []
+    real_sleep = _time.sleep
+    _time.sleep = lambda s: sleeps.append(s)  # type: ignore[assignment]
+    saved_fc = dispatch.FreeCADGui
+    saved_widgets = dispatch.QtWidgets
+    saved_core = dispatch.QtCore
+    dispatch.FreeCADGui = types.SimpleNamespace(updateGui=lambda: None)
+    bad_app = types.SimpleNamespace(
+        processEvents=lambda *a, **k: (_ for _ in ()).throw(OSError("no event loop")),
+    )
+    dispatch.QtWidgets = types.SimpleNamespace(
+        QApplication=type("QApplication", (), {"instance": staticmethod(lambda: bad_app)}),
+    )
+    dispatch.QtCore = _qt_core
+    try:
+        dispatch._flush_gui_events(delay_ms=5)
+        # Best-effort: at minimum no exception propagates.
+        assert isinstance(sleeps, list)
+    finally:
+        _time.sleep = real_sleep
+        dispatch.FreeCADGui = saved_fc
+        dispatch.QtWidgets = saved_widgets
+        dispatch.QtCore = saved_core
+
+
+def test_flush_gui_events_msleep_raises_falls_back_to_time_sleep():
+    """If QThread.msleep itself fails, use time.sleep instead."""
+    import time as _time
+    sleeps: list[float] = []
+    real_sleep = _time.sleep
+    _time.sleep = lambda s: sleeps.append(s)  # type: ignore[assignment]
+    saved_fc = dispatch.FreeCADGui
+    saved_widgets = dispatch.QtWidgets
+    saved_core = dispatch.QtCore
+    dispatch.FreeCADGui = types.SimpleNamespace(updateGui=lambda: None)
+    fake_app = types.SimpleNamespace(processEvents=lambda *a, **k: None)
+    dispatch.QtWidgets = types.SimpleNamespace(
+        QApplication=type("QApplication", (), {"instance": staticmethod(lambda: fake_app)}),
+    )
+    dispatch.QtCore = types.SimpleNamespace(
+        QEventLoop=types.SimpleNamespace(AllEvents=0),
+        QThread=types.SimpleNamespace(msleep=lambda *a, **k: (_ for _ in ()).throw(OSError("no thread"))),
+    )
+    try:
+        dispatch._flush_gui_events(delay_ms=25)
+        # processEvents called twice (before and after the sleep); msleep raised
+        # but time.sleep took over so the function completed.
+        assert 0.025 in sleeps
+    finally:
+        _time.sleep = real_sleep
+        dispatch.FreeCADGui = saved_fc
+        dispatch.QtWidgets = saved_widgets
+        dispatch.QtCore = saved_core

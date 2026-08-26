@@ -66,21 +66,53 @@ def _flush_gui_events(delay_ms: int = 50) -> None:
 
     Used by screenshot capture to ensure the view has actually rendered
     before ``saveImage`` is called.
+
+    Headless safety: when ``QApplication.instance()`` is *not* the
+    current thread (e.g. running under ``flatpak run --command=python3``
+    where there is no GUI event loop at all), we fall back to a plain
+    ``time.sleep`` so the screenshot still has time to render on the
+    FreeCAD console-side before ``saveImage`` is called.
     """
     if FreeCADGui is None:
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
         return
-    FreeCADGui.updateGui()
+    try:
+        FreeCADGui.updateGui()
+    except Exception:
+        # Headless: updateGui can raise — fall back to time.sleep and
+        # let the FreeCAD-side render finish.
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+        return
     if QtWidgets is None or QtCore is None:
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
         return
 
-    app = QtWidgets.QApplication.instance()
+    try:
+        app = QtWidgets.QApplication.instance()
+    except Exception:
+        app = None
     if app is None:
+        # No GUI event loop installed — running in a non-GUI interpreter.
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
         return
 
-    app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
-    if delay_ms > 0:
-        QtCore.QThread.msleep(delay_ms)
+    try:
         app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
+        if delay_ms > 0:
+            try:
+                QtCore.QThread.msleep(delay_ms)
+            except Exception:
+                time.sleep(delay_ms / 1000.0)
+            app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
+    except Exception:
+        # processEvents can fail if called from a non-GUI thread or
+        # after QApplication shutdown. Treat as best-effort.
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
 
 
 def _get_view_size(view: Any) -> tuple[int, int]:

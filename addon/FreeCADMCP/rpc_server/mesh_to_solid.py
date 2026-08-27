@@ -309,14 +309,7 @@ def mesh_to_solid(
     try:
         # ``MeshPart.meshToShape`` produces a non-solid shell + wire
         # soup — exactly what we want. We then sew + solidify.
-        import os as _os
-        if _os.environ.get("MCP_MESH_DEBUG") == "1":
-            import sys as _sys
-            print("DEBUG meshToShape=", MeshPart.meshToShape, file=_sys.stderr)
         shell_shape = MeshPart.meshToShape(obj.Mesh)
-        if _os.environ.get("MCP_MESH_DEBUG") == "1":
-            import sys as _sys
-            print("DEBUG shell_shape=", shell_shape, "fix=", shell_shape.fix, "sewShape=", shell_shape.sewShape, file=_sys.stderr)
     except Exception as e:
         return {
             "success": False,

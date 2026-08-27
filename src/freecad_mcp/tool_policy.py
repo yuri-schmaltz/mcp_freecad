@@ -78,6 +78,36 @@ ALL_TOOL_NAMES: frozenset[str] = frozenset({
     "step_extract_metadata",
     "bom_export",
     "fem_post_process",
+    # v1.1.2 — Inspection & Measurement suite
+    "list_faces",
+    "measure",
+    "measure_distance",
+    "geometric_verification",
+    "analyze_shape",
+    "spatial_query",
+    "recompute_diff",
+    "sketch_diagnostics",
+    # v1.1.2 — Multi-instance management
+    "list_freecad_instances",
+    "spawn_freecad_instance",
+    "select_freecad_instance",
+    "stop_freecad_instance",
+    "instance_status",
+    # v1.1.2 — Async execute + job management
+    "execute_code_async",
+    "poll_job",
+    "list_jobs",
+    "cancel_job",
+    # v1.1.2 — Live API introspection
+    "api_introspect",
+    "api_search",
+    # v1.1.2 — CAM / Path toolpath
+    "cam_create_tool",
+    "cam_create_tool_controller",
+    "cam_create_job",
+    "cam_add_operation",
+    "cam_post_process",
+    "cam_simulate_toolpath",
 })
 
 

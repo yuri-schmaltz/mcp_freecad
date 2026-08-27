@@ -124,6 +124,11 @@ _SUBMODS = (
     "step_metadata",
     "bom",
     "fem_post_process",
+    "inspection",
+    "multi_instance",
+    "api_introspect",
+    "job_runner",
+    "cam_ops",
 )
 for _sub in _SUBMODS:
     _spec = importlib.util.spec_from_file_location(

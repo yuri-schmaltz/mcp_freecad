@@ -13,14 +13,26 @@ from mcp.types import ImageContent, TextContent
 from .diff import DocumentDiff, diff_documents
 from .freecad_client import FreeCADConnection
 from .operations import (
+    analyze_shape_operation,
+    api_introspect_operation,
+    api_search_operation,
     bom_export_operation,
+    cam_add_operation_operation,
+    cam_create_job_operation,
+    cam_create_tool_controller_operation,
+    cam_create_tool_operation,
+    cam_post_process_operation,
+    cam_simulate_toolpath_operation,
+    cancel_job_operation,
     create_document_operation,
     create_object_operation,
     delete_object_operation,
     edit_object_operation,
+    execute_code_async_operation,
     execute_code_operation,
     export_object_operation,
     fem_post_process_operation,
+    geometric_verification_operation,
     get_active_view_operation,
     get_object_operation,
     get_objects_operation,
@@ -28,14 +40,27 @@ from .operations import (
     get_view_operation,
     health_check_operation,
     insert_part_from_library_operation,
+    instance_status_operation,
     list_documents_operation,
+    list_faces_operation,
+    list_freecad_instances_operation,
+    list_jobs_operation,
+    measure_distance_operation,
+    measure_operation,
     mesh_import_operation,
     mesh_simplify_operation,
     mesh_to_solid_operation,
+    poll_job_operation,
+    recompute_diff_operation,
     redo_operation,
     run_fem_analysis_operation,
     save_document_operation,
+    select_freecad_instance_operation,
+    sketch_diagnostics_operation,
+    spatial_query_operation,
+    spawn_freecad_instance_operation,
     step_extract_metadata_operation,
+    stop_freecad_instance_operation,
     undo_operation,
 )
 from .profiler import PerformanceProfiler, _profile_decorator, get_profiler
@@ -1207,6 +1232,608 @@ def get_replay(
             )
         )
     return _text_response_helper(f"unknown format: {format!r}; use json|markdown|replay")
+
+
+# ----------------------------------------------------------------------------
+# v1.1.2 — Inspection & Measurement suite
+# ----------------------------------------------------------------------------
+
+
+@profile_tool
+@_guard_tool("list_faces")
+@mcp.tool()
+def list_faces(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    type_filter: str | None = None,
+    limit: int = 100,
+) -> ToolResponse:
+    """List faces of an object with type, normal, centroid, area.
+
+    Args:
+        doc_name: Document containing the object.
+        obj_name: Object to inspect.
+        type_filter: Keep only faces whose geometric type contains
+            this substring (case-insensitive). E.g. ``"Cylinder"``
+            to find holes / bosses.
+        limit: Maximum number of faces to return.
+
+    Returns:
+        A JSON object with ``face_count`` and ``faces`` array. Each
+        entry has ``index``, ``type``, ``area``, ``centroid``,
+        ``normal``.
+    """
+    return list_faces_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, obj_name=obj_name,
+        type_filter=type_filter, limit=limit,
+    )
+
+
+@profile_tool
+@_guard_tool("measure")
+@mcp.tool()
+def measure(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    properties: list[str] | None = None,
+) -> ToolResponse:
+    """Measure geometric properties of an object.
+
+    Args:
+        doc_name: Document containing the object.
+        obj_name: Object to measure.
+        properties: Optional subset of ``volume``, ``area``,
+            ``bbox``, ``center_of_mass``, ``length``,
+            ``edge_count``, ``face_count``, ``vertex_count``.
+            If omitted, all are returned.
+
+    Returns:
+        A JSON object with the requested measurements.
+    """
+    return measure_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, obj_name=obj_name, properties=properties,
+    )
+
+
+@profile_tool
+@_guard_tool("measure_distance")
+@mcp.tool()
+def measure_distance(
+    ctx: Context,
+    doc_name: str,
+    obj_a: str,
+    obj_b: str,
+) -> ToolResponse:
+    """Return the minimum distance between two shapes in *doc_name*.
+
+    Uses ``BRepExtrema.DistShapeShape`` when available, with a
+    bbox-based approximation fallback.
+
+    Returns:
+        A JSON object with ``distance`` (float, mm) and optionally
+        ``approximate=True`` when the fallback was used.
+    """
+    return measure_distance_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, obj_a=obj_a, obj_b=obj_b,
+    )
+
+
+@profile_tool
+@_guard_tool("geometric_verification")
+@mcp.tool()
+def geometric_verification(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    handedness_tol: float = 1e-3,
+) -> ToolResponse:
+    """Check a shape for defects: emptiness, OCCT validity,
+    handedness (right vs left), and normal consistency.
+
+    Returns:
+        ``is_null``, ``is_valid``, ``det_approx_one``,
+        ``handedness_sign``, ``normal_consistency``.
+    """
+    return geometric_verification_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, obj_name=obj_name,
+        handedness_tol=handedness_tol,
+    )
+
+
+@profile_tool
+@_guard_tool("analyze_shape")
+@mcp.tool()
+def analyze_shape(ctx: Context, doc_name: str, obj_name: str) -> ToolResponse:
+    """Classify a shape's surface types.
+
+    Returns:
+        ``face_count`` and ``surface_types`` (e.g.
+        ``{"Plane": 6, "Cylinder": 4}``).
+    """
+    return analyze_shape_operation(
+        get_freecad_connection(), doc_name=doc_name, obj_name=obj_name,
+    )
+
+
+@profile_tool
+@_guard_tool("spatial_query")
+@mcp.tool()
+def spatial_query(
+    ctx: Context,
+    doc_name: str,
+    obj_a: str,
+    obj_b: str,
+    mode: str = "interference",
+    clearance_tol: float = 0.05,
+) -> ToolResponse:
+    """Spatial queries between two objects in *doc_name*.
+
+    Modes:
+        * ``"interference"`` — boolean intersection; non-empty means
+          the objects intersect.
+        * ``"clearance"``    — minimum distance; ``below_tolerance``
+          flag if less than ``clearance_tol``.
+        * ``"containment"``  — bbox of *a* fully inside bbox of *b*.
+
+    Args:
+        mode: One of ``interference``, ``clearance``, ``containment``.
+        clearance_tol: Tolerance in mm for the ``clearance`` mode.
+    """
+    return spatial_query_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, obj_a=obj_a, obj_b=obj_b,
+        mode=mode, clearance_tol=clearance_tol,
+    )
+
+
+@profile_tool
+@_guard_tool("recompute_diff")
+@mcp.tool()
+def recompute_diff(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    expected_volume: float | None = None,
+) -> ToolResponse:
+    """Recompute *doc_name* and return before/after metrics for *obj_name*.
+
+    Args:
+        expected_volume: If provided, the result includes
+            ``volume_delta = after_volume - expected_volume``.
+
+    Returns:
+        ``before_volume``, ``after_volume``, ``before_bbox``,
+        ``after_bbox``, optionally ``volume_delta``.
+    """
+    return recompute_diff_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, obj_name=obj_name,
+        expected_volume=expected_volume,
+    )
+
+
+@profile_tool
+@_guard_tool("sketch_diagnostics")
+@mcp.tool()
+def sketch_diagnostics(ctx: Context, doc_name: str, sketch_name: str) -> ToolResponse:
+    """Inspect a Sketcher sketch for DOF, conflicts, redundancies.
+
+    Returns:
+        ``constraint_count``, ``geometry_count``, ``dof``,
+        ``conflicts``, ``redundancies``, ``fully_constrained``.
+    """
+    return sketch_diagnostics_operation(
+        get_freecad_connection(), doc_name=doc_name, sketch_name=sketch_name,
+    )
+
+
+# ----------------------------------------------------------------------------
+# v1.1.2 — Multi-instance management
+# ----------------------------------------------------------------------------
+
+
+@profile_tool
+@_guard_tool("list_freecad_instances")
+@mcp.tool()
+def list_freecad_instances(
+    ctx: Context,
+    max_age_seconds: float = 604800.0,
+) -> ToolResponse:
+    """List live FreeCAD MCP instances from the discovery cache.
+
+    Args:
+        max_age_seconds: Prune entries older than this many seconds
+            (default 7 days). Set to ``0`` to disable pruning.
+
+    Returns:
+        ``instances`` (list of ``{uuid, label, pid, host, port,
+        started_at, ...}``), ``count``, ``active`` (UUID of the
+        active instance).
+    """
+    return list_freecad_instances_operation(
+        get_freecad_connection(), max_age_seconds=max_age_seconds,
+    )
+
+
+@profile_tool
+@_guard_tool("spawn_freecad_instance")
+@mcp.tool()
+def spawn_freecad_instance(
+    ctx: Context,
+    label: str | None = None,
+    host: str = "localhost",
+    port: int = 9875,
+    is_headless: bool = False,
+    command: str = "",
+    freecad_version: str = "unknown",
+) -> ToolResponse:
+    """Register a new FreeCAD instance and mark it active.
+
+    This does NOT actually spawn a process; it only registers the
+    discovery entry. Use the host OS to start FreeCAD with the
+    ``FreeCADMCP`` addon enabled, then call this to expose it via
+    the MCP server's instance registry.
+
+    Args:
+        label: Display label (defaults to ``FreeCAD-<host>-<port>``).
+        host: Bind host (default ``localhost``).
+        port: XML-RPC port (default 9875).
+        is_headless: Mark as headless.
+        command: Full command line used to launch.
+        freecad_version: FreeCAD version string.
+    """
+    return spawn_freecad_instance_operation(
+        get_freecad_connection(),
+        label=label, host=host, port=port,
+        is_headless=is_headless, command=command,
+        freecad_version=freecad_version,
+    )
+
+
+@profile_tool
+@_guard_tool("select_freecad_instance")
+@mcp.tool()
+def select_freecad_instance(ctx: Context, uuid_str: str) -> ToolResponse:
+    """Switch the active instance by UUID. Probes TCP first.
+
+    Returns:
+        ``ok``, ``reason``, ``info`` (with ``latency_ms``).
+    """
+    return select_freecad_instance_operation(
+        get_freecad_connection(), uuid_str=uuid_str,
+    )
+
+
+@profile_tool
+@_guard_tool("stop_freecad_instance")
+@mcp.tool()
+def stop_freecad_instance(ctx: Context, uuid_str: str) -> ToolResponse:
+    """Unregister an instance from the discovery cache.
+
+    Args:
+        uuid_str: UUID of the instance to remove.
+    """
+    return stop_freecad_instance_operation(
+        get_freecad_connection(), uuid_str=uuid_str,
+    )
+
+
+@profile_tool
+@_guard_tool("instance_status")
+@mcp.tool()
+def instance_status(ctx: Context, uuid_str: str | None = None) -> ToolResponse:
+    """Return health + latency for an instance (or the active one).
+
+    Args:
+        uuid_str: Optional UUID; defaults to the active instance.
+    """
+    return instance_status_operation(
+        get_freecad_connection(), uuid_str=uuid_str,
+    )
+
+
+# ----------------------------------------------------------------------------
+# v1.1.2 — Async execute + job management
+# ----------------------------------------------------------------------------
+
+
+@profile_tool
+@_guard_tool("execute_code_async")
+@mcp.tool()
+def execute_code_async(
+    ctx: Context,
+    code: str,
+    label: str = "",
+) -> ToolResponse:
+    """Submit FreeCAD Python code to the background runner.
+
+    Long-running ops (FEM solve, mesh boolean, CAM recompute) no
+    longer block the MCP client. Call :func:`poll_job` to retrieve
+    results.
+
+    Args:
+        code: Python code to execute in a FreeCAD-bound globals
+            namespace. The runner does NOT enforce elevated-mode;
+            the gate is the same as :func:`execute_code`.
+        label: Optional human-readable label.
+
+    Returns:
+        ``job_id``, ``label``, ``status`` (always ``"pending"`` or
+        ``"running"`` at this point), ``submitted_at``.
+    """
+    return execute_code_async_operation(
+        get_freecad_connection(), code=code, label=label,
+    )
+
+
+@profile_tool
+@_guard_tool("poll_job")
+@mcp.tool()
+def poll_job(ctx: Context, job_id: str) -> ToolResponse:
+    """Return the current status of a job.
+
+    Args:
+        job_id: UUID returned by :func:`execute_code_async`.
+
+    Returns:
+        ``status`` (``pending``/``running``/``done``/``error``/
+        ``cancelled``), ``result`` when ``done``, ``error`` and
+        ``traceback`` when ``error``, timing fields.
+    """
+    return poll_job_operation(get_freecad_connection(), job_id=job_id)
+
+
+@profile_tool
+@_guard_tool("list_jobs")
+@mcp.tool()
+def list_jobs(ctx: Context, include_terminal: bool = True) -> ToolResponse:
+    """List all known jobs.
+
+    Args:
+        include_terminal: When ``False``, hide jobs that already
+            finished (``done``/``error``/``cancelled``).
+    """
+    return list_jobs_operation(
+        get_freecad_connection(), include_terminal=include_terminal,
+    )
+
+
+@profile_tool
+@_guard_tool("cancel_job")
+@mcp.tool()
+def cancel_job(ctx: Context, job_id: str) -> ToolResponse:
+    """Mark a job as cancelled. Cooperative: running code is not
+    interrupted mid-flight.
+    """
+    return cancel_job_operation(get_freecad_connection(), job_id=job_id)
+
+
+# ----------------------------------------------------------------------------
+# v1.1.2 — Live API introspection
+# ----------------------------------------------------------------------------
+
+
+@profile_tool
+@_guard_tool("api_introspect")
+@mcp.tool()
+def api_introspect(ctx: Context, path: str) -> ToolResponse:
+    """Return the signature + docstring of any FreeCAD callable.
+
+    Args:
+        path: Dotted path like ``Part.makeBox`` or ``FreeCAD.Vector``.
+            For methods of classes, returns the outer class summary.
+
+    Returns:
+        ``qualified_name``, ``signature``, ``parameters`` (list of
+        ``{name, kind, default, has_default, annotation}``),
+        ``return_annotation``, ``doc``, ``is_class``,
+        ``base_classes``, ``module``.
+    """
+    return api_introspect_operation(get_freecad_connection(), path=path)
+
+
+@profile_tool
+@_guard_tool("api_search")
+@mcp.tool()
+def api_search(
+    ctx: Context,
+    query: str,
+    modules_filter: list[str] | None = None,
+    limit: int = 25,
+) -> ToolResponse:
+    """Search the FreeCAD API by name or docstring.
+
+    Args:
+        query: Plain substring (case-insensitive) or regex if it
+            starts and ends with ``/``.
+        modules_filter: Restrict to specific modules
+            (default: all built-ins).
+        limit: Maximum hits (default 25).
+
+    Returns:
+        List of hits ranked by score: exact name > substring > docstring.
+    """
+    return api_search_operation(
+        get_freecad_connection(),
+        query=query, modules_filter=modules_filter, limit=limit,
+    )
+
+
+# ----------------------------------------------------------------------------
+# v1.1.2 — CAM / Path toolpath
+# ----------------------------------------------------------------------------
+
+
+@profile_tool
+@_guard_tool("cam_create_tool")
+@mcp.tool()
+def cam_create_tool(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    tool_type: str = "EndMill",
+    diameter: float = 6.0,
+    length: float = 50.0,
+    material: str = "HighSpeedSteel",
+) -> ToolResponse:
+    """Create a tool entry in the document's tool library.
+
+    Args:
+        doc_name: Document to add the tool to.
+        name: Tool name (must be unique in the doc).
+        tool_type: ``EndMill`` / ``BallEndMill`` / ``Drill`` /
+            ``CenterDrill`` / ``CounterSink`` / ``CounterBore`` /
+            ``ChamferMill`` / ``Engraver`` / ``BullnoseEndMill``.
+        diameter: Tool diameter in mm.
+        length: Tool length in mm.
+        material: Tool material (``HighSpeedSteel``, ``Carbide``, ...).
+    """
+    return cam_create_tool_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, name=name, tool_type=tool_type,
+        diameter=diameter, length=length, material=material,
+    )
+
+
+@profile_tool
+@_guard_tool("cam_create_tool_controller")
+@mcp.tool()
+def cam_create_tool_controller(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    tool_name: str,
+    spindle_speed: float = 12000.0,
+    feed_rate: float = 600.0,
+    feed_rate_vertical: float = 300.0,
+) -> ToolResponse:
+    """Create a tool controller (spindle + feed rates) bound to a tool.
+
+    Args:
+        spindle_speed: RPM.
+        feed_rate: Horizontal feed rate (mm/min).
+        feed_rate_vertical: Plunge feed rate (mm/min).
+    """
+    return cam_create_tool_controller_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, name=name, tool_name=tool_name,
+        spindle_speed=spindle_speed, feed_rate=feed_rate,
+        feed_rate_vertical=feed_rate_vertical,
+    )
+
+
+@profile_tool
+@_guard_tool("cam_create_job")
+@mcp.tool()
+def cam_create_job(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    base_shape: str | None = None,
+    tool_controller_name: str | None = None,
+    stock_x: float = 100.0,
+    stock_y: float = 100.0,
+    stock_z: float = 25.0,
+) -> ToolResponse:
+    """Create a ``Path::Job`` with stock + tool controller.
+
+    Args:
+        base_shape: Object name of the base shape (optional).
+        tool_controller_name: Object name of the tool controller
+            (optional).
+        stock_x/y/z: Stock dimensions in mm.
+    """
+    return cam_create_job_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, name=name, base_shape=base_shape,
+        tool_controller_name=tool_controller_name,
+        stock_x=stock_x, stock_y=stock_y, stock_z=stock_z,
+    )
+
+
+@profile_tool
+@_guard_tool("cam_add_operation")
+@mcp.tool()
+def cam_add_operation(
+    ctx: Context,
+    doc_name: str,
+    job_name: str,
+    op_type: str,
+    name: str,
+    base_shape: str | None = None,
+    side: str = "Outside",
+    step_down: float = 1.0,
+    tool_controller_name: str | None = None,
+) -> ToolResponse:
+    """Add a Path operation to a Job.
+
+    Args:
+        op_type: One of ``profile``, ``pocket``, ``adaptive``,
+            ``drilling``, ``face``.
+        side: For profile ops: ``Outside`` (default) or ``Inside``.
+        step_down: Depth per pass in mm.
+    """
+    return cam_add_operation_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, job_name=job_name, op_type=op_type, name=name,
+        base_shape=base_shape, side=side, step_down=step_down,
+        tool_controller_name=tool_controller_name,
+    )
+
+
+@profile_tool
+@_guard_tool("cam_post_process")
+@mcp.tool()
+def cam_post_process(
+    ctx: Context,
+    doc_name: str,
+    job_name: str,
+    post_processor: str = "linuxcnc",
+    output_path: str | None = None,
+) -> ToolResponse:
+    """Run a post-processor on a Path::Job.
+
+    Args:
+        post_processor: Name of the FreeCAD post-processor
+            (``linuxcnc``, ``grbl``, ``marlin``, ``smoothieboard``,
+            ``haas``, ``mach3_mach4``, ``toshiba``, ...).
+        output_path: If given, write the G-code here.
+    """
+    return cam_post_process_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, job_name=job_name,
+        post_processor=post_processor, output_path=output_path,
+    )
+
+
+@profile_tool
+@_guard_tool("cam_simulate_toolpath")
+@mcp.tool()
+def cam_simulate_toolpath(
+    ctx: Context,
+    doc_name: str,
+    job_name: str,
+    max_segments: int = 5000,
+) -> ToolResponse:
+    """Return a downsampled backplot of the tool path.
+
+    Useful for visualising the toolpath client-side without running
+    a full OpenGL simulation.
+
+    Args:
+        max_segments: Maximum number of points to return
+            (default 5000).
+    """
+    return cam_simulate_toolpath_operation(
+        get_freecad_connection(),
+        doc_name=doc_name, job_name=job_name, max_segments=max_segments,
+    )
 
 
 # ----------------------------------------------------------------------------

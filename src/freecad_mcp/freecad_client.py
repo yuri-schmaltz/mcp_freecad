@@ -372,6 +372,202 @@ class FreeCADConnection:
     def fem_post_process(self, path: str) -> dict[str, Any]:
         return self.breaker.call(lambda: self.server.fem_post_process(path))  # type: ignore[return-value]
 
+    # ------------------------------------------------------------------
+    # v1.1.2 — Inspection & Measurement suite
+    # ------------------------------------------------------------------
+
+    def list_faces(
+        self, doc_name: str, obj_name: str,
+        type_filter: str | None = None, limit: int = 100,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.list_faces(doc_name, obj_name, type_filter, limit)
+        )  # type: ignore[return-value]
+
+    def measure(
+        self, doc_name: str, obj_name: str, properties: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.measure(doc_name, obj_name, properties)
+        )  # type: ignore[return-value]
+
+    def measure_distance(
+        self, doc_name: str, obj_a: str, obj_b: str,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.measure_distance(doc_name, obj_a, obj_b)
+        )  # type: ignore[return-value]
+
+    def geometric_verification(
+        self, doc_name: str, obj_name: str, handedness_tol: float = 1e-3,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.geometric_verification(doc_name, obj_name, handedness_tol)
+        )  # type: ignore[return-value]
+
+    def analyze_shape(self, doc_name: str, obj_name: str) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.analyze_shape(doc_name, obj_name)
+        )  # type: ignore[return-value]
+
+    def spatial_query(
+        self, doc_name: str, obj_a: str, obj_b: str,
+        mode: str = "interference", clearance_tol: float = 0.05,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.spatial_query(doc_name, obj_a, obj_b, mode, clearance_tol)
+        )  # type: ignore[return-value]
+
+    def recompute_diff(
+        self, doc_name: str, obj_name: str, expected_volume: float | None = None,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.recompute_diff(doc_name, obj_name, expected_volume)
+        )  # type: ignore[return-value]
+
+    def sketch_diagnostics(self, doc_name: str, sketch_name: str) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.sketch_diagnostics(doc_name, sketch_name)
+        )  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Multi-instance management
+    # ------------------------------------------------------------------
+
+    def list_freecad_instances(self, max_age_seconds: float = 604800.0) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.list_freecad_instances(max_age_seconds)
+        )  # type: ignore[return-value]
+
+    def spawn_freecad_instance(
+        self,
+        label: str | None = None, host: str = "localhost", port: int = 9875,
+        is_headless: bool = False, command: str = "", freecad_version: str = "unknown",
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.spawn_freecad_instance(
+                label, host, port, is_headless, command, freecad_version,
+            )
+        )  # type: ignore[return-value]
+
+    def select_freecad_instance(self, uuid_str: str) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.select_freecad_instance(uuid_str)
+        )  # type: ignore[return-value]
+
+    def stop_freecad_instance(self, uuid_str: str) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.stop_freecad_instance(uuid_str)
+        )  # type: ignore[return-value]
+
+    def instance_status(self, uuid_str: str | None = None) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.instance_status(uuid_str)
+        )  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Async execute + job management
+    # ------------------------------------------------------------------
+
+    def execute_code_async(self, code: str, label: str = "") -> dict[str, Any]:
+        return self._call_elevated(
+            "execute_code_async",
+            lambda: self.server.execute_code_async(code, label),
+        )  # type: ignore[return-value]
+
+    def poll_job(self, job_id: str) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.poll_job(job_id))  # type: ignore[return-value]
+
+    def list_jobs(self, include_terminal: bool = True) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.list_jobs(include_terminal)
+        )  # type: ignore[return-value]
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.cancel_job(job_id))  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Live API introspection
+    # ------------------------------------------------------------------
+
+    def api_introspect(self, path: str) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.api_introspect(path))  # type: ignore[return-value]
+
+    def api_search(
+        self, query: str, modules_filter: list[str] | None = None, limit: int = 25,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.api_search(query, modules_filter, limit)
+        )  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — CAM / Path toolpath
+    # ------------------------------------------------------------------
+
+    def cam_create_tool(
+        self, doc_name: str, name: str, tool_type: str = "EndMill",
+        diameter: float = 6.0, length: float = 50.0, material: str = "HighSpeedSteel",
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.cam_create_tool(
+                doc_name, name, tool_type, diameter, length, material,
+            )
+        )  # type: ignore[return-value]
+
+    def cam_create_tool_controller(
+        self, doc_name: str, name: str, tool_name: str,
+        spindle_speed: float = 12000.0, feed_rate: float = 600.0,
+        feed_rate_vertical: float = 300.0,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.cam_create_tool_controller(
+                doc_name, name, tool_name, spindle_speed, feed_rate, feed_rate_vertical,
+            )
+        )  # type: ignore[return-value]
+
+    def cam_create_job(
+        self, doc_name: str, name: str,
+        base_shape: str | None = None, tool_controller_name: str | None = None,
+        stock_x: float = 100.0, stock_y: float = 100.0, stock_z: float = 25.0,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.cam_create_job(
+                doc_name, name, base_shape, tool_controller_name,
+                stock_x, stock_y, stock_z,
+            )
+        )  # type: ignore[return-value]
+
+    def cam_add_operation(
+        self, doc_name: str, job_name: str, op_type: str, name: str,
+        base_shape: str | None = None, side: str = "Outside",
+        step_down: float = 1.0, tool_controller_name: str | None = None,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.cam_add_operation(
+                doc_name, job_name, op_type, name,
+                base_shape, side, step_down, tool_controller_name,
+            )
+        )  # type: ignore[return-value]
+
+    def cam_post_process(
+        self, doc_name: str, job_name: str,
+        post_processor: str = "linuxcnc", output_path: str | None = None,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.cam_post_process(
+                doc_name, job_name, post_processor, output_path,
+            )
+        )  # type: ignore[return-value]
+
+    def cam_simulate_toolpath(
+        self, doc_name: str, job_name: str, max_segments: int = 5000,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.cam_simulate_toolpath(
+                doc_name, job_name, max_segments,
+            )
+        )  # type: ignore[return-value]
+
     def execute_code(self, code: str, request_id: str | None = None) -> dict[str, Any]:
         return self._call_elevated(
             "execute_code",

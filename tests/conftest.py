@@ -262,6 +262,11 @@ def load_rpc_server():
         "step_metadata",
         "bom",
         "fem_post_process",
+        "inspection",
+        "multi_instance",
+        "api_introspect",
+        "job_runner",
+        "cam_ops",
     )
 
     def _loader() -> types.ModuleType:

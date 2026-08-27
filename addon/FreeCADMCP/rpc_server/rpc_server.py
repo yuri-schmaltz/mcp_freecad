@@ -88,6 +88,37 @@ from .mesh_to_solid import mesh_import, mesh_simplify, mesh_to_solid
 from .step_metadata import step_extract_metadata
 from .bom import bom_export
 from .fem_post_process import fem_post_process
+from .inspection import (
+    analyze_shape,
+    geometric_verification,
+    list_faces,
+    measure,
+    measure_distance,
+    recompute_diff,
+    sketch_diagnostics,
+    spatial_query,
+)
+from .multi_instance import (
+    clear_active,
+    discovery_dir,
+    get_active,
+    get_instance,
+    list_instances as _list_instances,
+    register_instance,
+    select_instance,
+    set_active,
+    unregister_instance,
+)
+from .api_introspect import api_introspect as _api_introspect, api_search as _api_search, default_modules as _default_modules
+from .job_runner import get_runner as _get_job_runner, JobRunner
+from .cam_ops import (
+    cam_add_operation,
+    cam_create_job,
+    cam_create_tool,
+    cam_create_tool_controller,
+    cam_post_process,
+    cam_simulate_toolpath,
+)
 from .serialize import serialize_object
 
 # Backward-compat alias (legacy name in v0.3.x and earlier).
@@ -601,6 +632,32 @@ class FreeCADRPC:
         "step_extract_metadata": 5.0,
         "bom_export": 60.0,
         "fem_post_process": 60.0,
+        # v1.1.2 — Inspection / Multi-instance / Jobs / API introspect / CAM
+        "list_faces": 30.0,
+        "measure": 30.0,
+        "measure_distance": 30.0,
+        "geometric_verification": 30.0,
+        "analyze_shape": 30.0,
+        "spatial_query": 60.0,
+        "recompute_diff": 60.0,
+        "sketch_diagnostics": 30.0,
+        "list_freecad_instances": 5.0,
+        "spawn_freecad_instance": 30.0,
+        "select_freecad_instance": 5.0,
+        "stop_freecad_instance": 10.0,
+        "instance_status": 5.0,
+        "execute_code_async": 10.0,
+        "poll_job": 5.0,
+        "list_jobs": 5.0,
+        "cancel_job": 5.0,
+        "api_introspect": 5.0,
+        "api_search": 5.0,
+        "cam_create_tool": 30.0,
+        "cam_create_tool_controller": 30.0,
+        "cam_create_job": 30.0,
+        "cam_add_operation": 60.0,
+        "cam_post_process": 60.0,
+        "cam_simulate_toolpath": 60.0,
         "cancel_request": 5.0,
     }
 
@@ -952,6 +1009,342 @@ class FreeCADRPC:
                 return {"success": False, "reason": f"{type(e).__name__}: {e}"}
 
         return self._tracked_call(None, task, self._timeout_for("fem_post_process", 60.0))
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Inspection & Measurement suite
+    # ------------------------------------------------------------------
+
+    def list_faces(
+        self, doc_name: str, obj_name: str,
+        type_filter: str | None = None, limit: int = 100,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return list_faces(
+                    doc_name=doc_name, obj_name=obj_name,
+                    type_filter=type_filter, limit=limit,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("list_faces"))
+
+    def measure(
+        self, doc_name: str, obj_name: str,
+        properties: list[str] | None = None,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return measure(doc_name=doc_name, obj_name=obj_name, properties=properties)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("measure"))
+
+    def measure_distance(
+        self, doc_name: str, obj_a: str, obj_b: str,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return measure_distance(doc_name=doc_name, obj_a=obj_a, obj_b=obj_b)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("measure_distance"))
+
+    def geometric_verification(
+        self, doc_name: str, obj_name: str,
+        handedness_tol: float = 1e-3,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return geometric_verification(
+                    doc_name=doc_name, obj_name=obj_name,
+                    handedness_tol=handedness_tol,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("geometric_verification"))
+
+    def analyze_shape(self, doc_name: str, obj_name: str) -> dict[str, Any]:
+        def task():
+            try:
+                return analyze_shape(doc_name=doc_name, obj_name=obj_name)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("analyze_shape"))
+
+    def spatial_query(
+        self, doc_name: str, obj_a: str, obj_b: str,
+        mode: str = "interference", clearance_tol: float = 0.05,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return spatial_query(
+                    doc_name=doc_name, obj_a=obj_a, obj_b=obj_b,
+                    mode=mode, clearance_tol=clearance_tol,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("spatial_query"))
+
+    def recompute_diff(
+        self, doc_name: str, obj_name: str,
+        expected_volume: float | None = None,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return recompute_diff(
+                    doc_name=doc_name, obj_name=obj_name,
+                    expected_volume=expected_volume,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("recompute_diff"))
+
+    def sketch_diagnostics(self, doc_name: str, sketch_name: str) -> dict[str, Any]:
+        def task():
+            try:
+                return sketch_diagnostics(doc_name=doc_name, sketch_name=sketch_name)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("sketch_diagnostics"))
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Multi-instance management
+    # ------------------------------------------------------------------
+
+    def list_freecad_instances(self, max_age_seconds: float = 604800.0) -> dict[str, Any]:
+        try:
+            items = _list_instances(max_age_seconds=max_age_seconds)
+            return {
+                "success": True,
+                "count": len(items),
+                "instances": [i.to_dict() for i in items],
+                "active": get_active(),
+            }
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def spawn_freecad_instance(
+        self,
+        label: str | None = None,
+        host: str = "localhost",
+        port: int = 9875,
+        is_headless: bool = False,
+        command: str = "",
+        freecad_version: str = "unknown",
+    ) -> dict[str, Any]:
+        try:
+            info = register_instance(
+                label=label, host=host, port=port,
+                is_headless=is_headless, command=command,
+                freecad_version=freecad_version,
+                active_document=(
+                    FreeCAD.ActiveDocument.Name if FreeCAD is not None
+                    and getattr(FreeCAD, "ActiveDocument", None) is not None
+                    else None
+                ),
+            )
+            set_active(info.uuid)
+            return {"success": True, "instance": info.to_dict()}
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def select_freecad_instance(self, uuid_str: str) -> dict[str, Any]:
+        try:
+            res = select_instance(uuid_str)
+            if res.get("ok"):
+                set_active(uuid_str)
+            return res
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def stop_freecad_instance(self, uuid_str: str) -> dict[str, Any]:
+        try:
+            removed = unregister_instance(uuid_str)
+            if get_active() == uuid_str:
+                clear_active()
+            return {"success": True, "uuid": uuid_str, "removed": removed}
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def instance_status(self, uuid_str: str | None = None) -> dict[str, Any]:
+        try:
+            target = uuid_str or get_active()
+            if target is None:
+                return {"success": False, "reason": "no active instance set"}
+            return select_instance(target)
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Async execute + job management
+    # ------------------------------------------------------------------
+
+    def execute_code_async(self, code: str, label: str = "") -> dict[str, Any]:
+        def task():
+            try:
+                runner = _get_job_runner()
+                # Pre-bind FreeCAD globals for the worker thread.
+                g = {
+                    "FreeCAD": FreeCAD,
+                    "FreeCADGui": FreeCADGui,
+                    "Part": __import__("Part", fromlist=["Part"]) if FreeCAD else None,
+                }
+                job = runner.submit(code, label=label or "execute_code_async", globals_=g)
+                return {
+                    "success": True,
+                    "job_id": job.job_id,
+                    "label": job.label,
+                    "status": job.status,
+                    "submitted_at": job.submitted_at,
+                }
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("execute_code_async"))
+
+    def poll_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            runner = _get_job_runner()
+            job = runner.poll(job_id)
+            if job is None:
+                return {"success": False, "reason": f"job {job_id!r} not found"}
+            return {"success": True, "job": job.to_dict()}
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def list_jobs(self, include_terminal: bool = True) -> dict[str, Any]:
+        try:
+            runner = _get_job_runner()
+            jobs = runner.list_jobs(include_terminal=include_terminal)
+            return {
+                "success": True,
+                "count": len(jobs),
+                "jobs": [j.to_dict() for j in jobs],
+            }
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            runner = _get_job_runner()
+            ok = runner.cancel(job_id)
+            return {"success": True, "job_id": job_id, "cancelled": ok}
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — Live API introspection
+    # ------------------------------------------------------------------
+
+    def api_introspect(self, path: str) -> dict[str, Any]:
+        try:
+            return _api_introspect(path, _default_modules())
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    def api_search(
+        self, query: str, modules_filter: list[str] | None = None, limit: int = 25,
+    ) -> dict[str, Any]:
+        try:
+            hits = _api_search(
+                query, _default_modules(),
+                modules_filter=modules_filter, limit=limit,
+            )
+            return {"success": True, "query": query, "count": len(hits), "hits": hits}
+        except Exception as e:
+            return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+    # ------------------------------------------------------------------
+    # v1.1.2 — CAM / Path toolpath
+    # ------------------------------------------------------------------
+
+    def cam_create_tool(
+        self, doc_name: str, name: str,
+        tool_type: str = "EndMill", diameter: float = 6.0,
+        length: float = 50.0, material: str = "HighSpeedSteel",
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return cam_create_tool(
+                    doc_name=doc_name, name=name, tool_type=tool_type,
+                    diameter=diameter, length=length, material=material,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("cam_create_tool"))
+
+    def cam_create_tool_controller(
+        self, doc_name: str, name: str, tool_name: str,
+        spindle_speed: float = 12000.0, feed_rate: float = 600.0,
+        feed_rate_vertical: float = 300.0,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return cam_create_tool_controller(
+                    doc_name=doc_name, name=name, tool_name=tool_name,
+                    spindle_speed=spindle_speed, feed_rate=feed_rate,
+                    feed_rate_vertical=feed_rate_vertical,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("cam_create_tool_controller"))
+
+    def cam_create_job(
+        self, doc_name: str, name: str,
+        base_shape: str | None = None, tool_controller_name: str | None = None,
+        stock_x: float = 100.0, stock_y: float = 100.0, stock_z: float = 25.0,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return cam_create_job(
+                    doc_name=doc_name, name=name, base_shape=base_shape,
+                    tool_controller_name=tool_controller_name,
+                    stock_x=stock_x, stock_y=stock_y, stock_z=stock_z,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("cam_create_job"))
+
+    def cam_add_operation(
+        self, doc_name: str, job_name: str, op_type: str, name: str,
+        base_shape: str | None = None, side: str = "Outside",
+        step_down: float = 1.0, tool_controller_name: str | None = None,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return cam_add_operation(
+                    doc_name=doc_name, job_name=job_name, op_type=op_type, name=name,
+                    base_shape=base_shape, side=side, step_down=step_down,
+                    tool_controller_name=tool_controller_name,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("cam_add_operation"))
+
+    def cam_post_process(
+        self, doc_name: str, job_name: str,
+        post_processor: str = "linuxcnc", output_path: str | None = None,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return cam_post_process(
+                    doc_name=doc_name, job_name=job_name,
+                    post_processor=post_processor, output_path=output_path,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("cam_post_process"))
+
+    def cam_simulate_toolpath(
+        self, doc_name: str, job_name: str, max_segments: int = 5000,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return cam_simulate_toolpath(
+                    doc_name=doc_name, job_name=job_name, max_segments=max_segments,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+        return self._tracked_call(None, task, self._timeout_for("cam_simulate_toolpath"))
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600, request_id: str | None = None) -> dict[str, Any]:
         try:
@@ -1505,6 +1898,31 @@ def start_rpc_server(port=9875):
             return f"MCP RPC: failed to spawn server thread: {exc}"
 
         QtCore.QTimer.singleShot(500, process_gui_tasks)
+
+        # v1.1.2 — register this instance so other clients can discover it.
+        try:
+            instance_info = register_instance(
+                host=host, port=port, is_headless=False,
+                freecad_version=(
+                    FreeCAD.Version()[0] if FreeCAD is not None and hasattr(FreeCAD, "Version")
+                    else "unknown"
+                ),
+                active_document=(
+                    FreeCAD.ActiveDocument.Name if FreeCAD is not None
+                    and getattr(FreeCAD, "ActiveDocument", None) is not None
+                    else None
+                ),
+            )
+            set_active(instance_info.uuid)
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintMessage(
+                    f"MCP RPC: registered instance {instance_info.uuid}\n"
+                )
+        except Exception as e:
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintWarning(
+                    f"MCP RPC: instance registration failed: {type(e).__name__}: {e}\n"
+                )
 
         msg = f"RPC Server started at {host}:{port}."
         if remote_enabled:

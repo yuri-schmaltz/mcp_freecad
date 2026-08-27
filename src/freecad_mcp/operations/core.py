@@ -484,3 +484,429 @@ def fem_post_process_operation(freecad: FreeCADConnection, path: str) -> ToolRes
     if res.get("success"):
         return json_response(res)
     return text_response(f"fem_post_process failed: {res.get('reason', 'unknown error')}")
+
+
+# ---------------------------------------------------------------------------
+# v1.1.2 — Inspection & Measurement suite
+# ---------------------------------------------------------------------------
+
+
+@safe_operation
+def list_faces_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_name: str,
+    type_filter: str | None = None,
+    limit: int = 100,
+) -> ToolResponse:
+    """Return per-face type / normal / area / centroid.
+
+    ``type_filter`` keeps only faces whose geometric type contains
+    that substring (case-insensitive). Useful with ``"Cylinder"``
+    to find holes.
+    """
+    res = freecad.list_faces(
+        doc_name=doc_name, obj_name=obj_name,
+        type_filter=type_filter, limit=limit,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"list_faces failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def measure_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_name: str,
+    properties: list[str] | None = None,
+) -> ToolResponse:
+    """Return geometric measurements: volume, area, bbox, COM, length."""
+    res = freecad.measure(
+        doc_name=doc_name, obj_name=obj_name, properties=properties,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"measure failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def measure_distance_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_a: str,
+    obj_b: str,
+) -> ToolResponse:
+    """Return minimum distance between two shapes."""
+    res = freecad.measure_distance(
+        doc_name=doc_name, obj_a=obj_a, obj_b=obj_b,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"measure_distance failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def geometric_verification_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_name: str,
+    handedness_tol: float = 1e-3,
+) -> ToolResponse:
+    """Check shape validity, handedness, normal consistency."""
+    res = freecad.geometric_verification(
+        doc_name=doc_name, obj_name=obj_name, handedness_tol=handedness_tol,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"geometric_verification failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def analyze_shape_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_name: str,
+) -> ToolResponse:
+    """Return counts of each surface type (Plane/Cylinder/Cone/Sphere...)."""
+    res = freecad.analyze_shape(doc_name=doc_name, obj_name=obj_name)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"analyze_shape failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def spatial_query_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_a: str,
+    obj_b: str,
+    mode: str = "interference",
+    clearance_tol: float = 0.05,
+) -> ToolResponse:
+    """Modes: interference, clearance, containment."""
+    res = freecad.spatial_query(
+        doc_name=doc_name, obj_a=obj_a, obj_b=obj_b,
+        mode=mode, clearance_tol=clearance_tol,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"spatial_query failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def recompute_diff_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_name: str,
+    expected_volume: float | None = None,
+) -> ToolResponse:
+    """Recompute and return before/after metrics."""
+    res = freecad.recompute_diff(
+        doc_name=doc_name, obj_name=obj_name,
+        expected_volume=expected_volume,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"recompute_diff failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def sketch_diagnostics_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    sketch_name: str,
+) -> ToolResponse:
+    """Return DOF / conflicts / redundancies for a sketch."""
+    res = freecad.sketch_diagnostics(
+        doc_name=doc_name, sketch_name=sketch_name,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"sketch_diagnostics failed: {res.get('reason', 'unknown error')}")
+
+
+# ---------------------------------------------------------------------------
+# v1.1.2 — Multi-instance management
+# ---------------------------------------------------------------------------
+
+
+@safe_operation
+def list_freecad_instances_operation(
+    freecad: FreeCADConnection,
+    max_age_seconds: float = 604800.0,
+) -> ToolResponse:
+    """List all live FreeCAD instances (UUID, host, port, PID, label)."""
+    res = freecad.list_freecad_instances(max_age_seconds=max_age_seconds)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"list_freecad_instances failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def spawn_freecad_instance_operation(
+    freecad: FreeCADConnection,
+    label: str | None = None,
+    host: str = "localhost",
+    port: int = 9875,
+    is_headless: bool = False,
+    command: str = "",
+    freecad_version: str = "unknown",
+) -> ToolResponse:
+    """Register a new FreeCAD instance and mark it as active."""
+    res = freecad.spawn_freecad_instance(
+        label=label, host=host, port=port,
+        is_headless=is_headless, command=command,
+        freecad_version=freecad_version,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"spawn_freecad_instance failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def select_freecad_instance_operation(
+    freecad: FreeCADConnection,
+    uuid_str: str,
+) -> ToolResponse:
+    """Switch the active instance by UUID."""
+    res = freecad.select_freecad_instance(uuid_str)
+    if res.get("success") is False:
+        return text_response(f"select_freecad_instance failed: {res.get('reason', 'unknown error')}")
+    return json_response(res)
+
+
+@safe_operation
+def stop_freecad_instance_operation(
+    freecad: FreeCADConnection,
+    uuid_str: str,
+) -> ToolResponse:
+    """Unregister an instance from discovery."""
+    res = freecad.stop_freecad_instance(uuid_str)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"stop_freecad_instance failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def instance_status_operation(
+    freecad: FreeCADConnection,
+    uuid_str: str | None = None,
+) -> ToolResponse:
+    """Health + latency of an instance (or active if uuid_str is None)."""
+    res = freecad.instance_status(uuid_str)
+    if res.get("ok") is False and res.get("reason"):
+        return text_response(f"instance_status failed: {res.get('reason')}")
+    return json_response(res)
+
+
+# ---------------------------------------------------------------------------
+# v1.1.2 — Async execute + job management
+# ---------------------------------------------------------------------------
+
+
+@safe_operation
+def execute_code_async_operation(
+    freecad: FreeCADConnection,
+    code: str,
+    label: str = "",
+) -> ToolResponse:
+    """Submit code to the background runner. Returns job_id."""
+    res = freecad.execute_code_async(code=code, label=label)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"execute_code_async failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def poll_job_operation(
+    freecad: FreeCADConnection,
+    job_id: str,
+) -> ToolResponse:
+    """Return status + result for a job."""
+    res = freecad.poll_job(job_id)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"poll_job failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def list_jobs_operation(
+    freecad: FreeCADConnection,
+    include_terminal: bool = True,
+) -> ToolResponse:
+    """List all known jobs (running + done + error + cancelled)."""
+    res = freecad.list_jobs(include_terminal=include_terminal)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"list_jobs failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def cancel_job_operation(
+    freecad: FreeCADConnection,
+    job_id: str,
+) -> ToolResponse:
+    """Mark a job as cancelled (cooperative)."""
+    res = freecad.cancel_job(job_id)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cancel_job failed: {res.get('reason', 'unknown error')}")
+
+
+# ---------------------------------------------------------------------------
+# v1.1.2 — Live API introspection
+# ---------------------------------------------------------------------------
+
+
+@safe_operation
+def api_introspect_operation(
+    freecad: FreeCADConnection,
+    path: str,
+) -> ToolResponse:
+    """Return signature + docstring of any FreeCAD callable."""
+    res = freecad.api_introspect(path=path)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"api_introspect failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def api_search_operation(
+    freecad: FreeCADConnection,
+    query: str,
+    modules_filter: list[str] | None = None,
+    limit: int = 25,
+) -> ToolResponse:
+    """Search FreeCAD API by name or docstring."""
+    res = freecad.api_search(
+        query=query, modules_filter=modules_filter, limit=limit,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"api_search failed: {res.get('reason', 'unknown error')}")
+
+
+# ---------------------------------------------------------------------------
+# v1.1.2 — CAM / Path toolpath
+# ---------------------------------------------------------------------------
+
+
+@safe_operation
+def cam_create_tool_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    name: str,
+    tool_type: str = "EndMill",
+    diameter: float = 6.0,
+    length: float = 50.0,
+    material: str = "HighSpeedSteel",
+) -> ToolResponse:
+    """Create a tool entry in the document's tool library."""
+    res = freecad.cam_create_tool(
+        doc_name=doc_name, name=name, tool_type=tool_type,
+        diameter=diameter, length=length, material=material,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cam_create_tool failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def cam_create_tool_controller_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    name: str,
+    tool_name: str,
+    spindle_speed: float = 12000.0,
+    feed_rate: float = 600.0,
+    feed_rate_vertical: float = 300.0,
+) -> ToolResponse:
+    """Create a tool controller with spindle + feed rates."""
+    res = freecad.cam_create_tool_controller(
+        doc_name=doc_name, name=name, tool_name=tool_name,
+        spindle_speed=spindle_speed, feed_rate=feed_rate,
+        feed_rate_vertical=feed_rate_vertical,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cam_create_tool_controller failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def cam_create_job_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    name: str,
+    base_shape: str | None = None,
+    tool_controller_name: str | None = None,
+    stock_x: float = 100.0,
+    stock_y: float = 100.0,
+    stock_z: float = 25.0,
+) -> ToolResponse:
+    """Create a Path::Job with stock + tool controller."""
+    res = freecad.cam_create_job(
+        doc_name=doc_name, name=name, base_shape=base_shape,
+        tool_controller_name=tool_controller_name,
+        stock_x=stock_x, stock_y=stock_y, stock_z=stock_z,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cam_create_job failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def cam_add_operation_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    job_name: str,
+    op_type: str,
+    name: str,
+    base_shape: str | None = None,
+    side: str = "Outside",
+    step_down: float = 1.0,
+    tool_controller_name: str | None = None,
+) -> ToolResponse:
+    """Add a Path operation (profile/pocket/adaptive/drilling/face) to a job."""
+    res = freecad.cam_add_operation(
+        doc_name=doc_name, job_name=job_name, op_type=op_type, name=name,
+        base_shape=base_shape, side=side, step_down=step_down,
+        tool_controller_name=tool_controller_name,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cam_add_operation failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def cam_post_process_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    job_name: str,
+    post_processor: str = "linuxcnc",
+    output_path: str | None = None,
+) -> ToolResponse:
+    """Run post-processor on a Path::Job and return the G-code."""
+    res = freecad.cam_post_process(
+        doc_name=doc_name, job_name=job_name,
+        post_processor=post_processor, output_path=output_path,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cam_post_process failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def cam_simulate_toolpath_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    job_name: str,
+    max_segments: int = 5000,
+) -> ToolResponse:
+    """Return a downsampled backplot of the tool path."""
+    res = freecad.cam_simulate_toolpath(
+        doc_name=doc_name, job_name=job_name, max_segments=max_segments,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"cam_simulate_toolpath failed: {res.get('reason', 'unknown error')}")

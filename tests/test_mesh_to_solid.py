@@ -69,12 +69,13 @@ class _FakeFeature:
 
 
 class _FakeShape:
-    isNull = False
-
     def __init__(self) -> None:
         self.Faces = [object(), object(), object()]
 
     Volume = 123.4
+
+    def isNull(self) -> bool:
+        return False
 
     def fix(self, *args, **kwargs):
         return self
@@ -281,7 +282,7 @@ def test_mesh_to_solid_happy_path(mesh_mod, monkeypatch) -> None:
 
 def test_mesh_to_solid_without_repair(mesh_mod, monkeypatch) -> None:
     mod, doc, _mp, _p, shell, sewed, solid = _install_mesh_part_pipeline(mesh_mod, monkeypatch)
-    monkeypatch.setattr(_mp, "makeSolid", lambda shape: None, raising=False)
+    monkeypatch.setattr(_p, "makeSolid", lambda shape: None, raising=False)
     res = mod.mesh_to_solid(doc_name="Doc", mesh_name="MyMesh", repair=False)
     assert res["success"] is True
     assert res["repair_applied"] is False
@@ -290,7 +291,7 @@ def test_mesh_to_solid_without_repair(mesh_mod, monkeypatch) -> None:
 
 def test_mesh_to_solid_custom_name(mesh_mod, monkeypatch) -> None:
     mod, doc, _mp, _p, shell, sewed, solid = _install_mesh_part_pipeline(mesh_mod, monkeypatch)
-    monkeypatch.setattr(_mp, "makeSolid", lambda shape: None, raising=False)
+    monkeypatch.setattr(_p, "makeSolid", lambda shape: None, raising=False)
     res = mod.mesh_to_solid(doc_name="Doc", mesh_name="MyMesh", new_name="Custom")
     assert res["success"] is True
     assert res["object_name"] == "Custom"

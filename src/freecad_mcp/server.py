@@ -10,6 +10,7 @@ from typing import Any, Literal
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ImageContent, TextContent
 
+from .diff import DocumentDiff, diff_documents
 from .freecad_client import FreeCADConnection
 from .operations import (
     create_document_operation,
@@ -31,13 +32,22 @@ from .operations import (
     save_document_operation,
     undo_operation,
 )
+from .profiler import PerformanceProfiler, _profile_decorator, get_profiler
 from .prompt_text import ASSET_CREATION_STRATEGY
+from .replay import (
+    SessionRecorder,
+    default_replay_dir,
+)
+from .responses import ToolResponse
+from .streaming import OutputBuffer, ProgressDebouncer
 from .tool_policy import (
+    ALL_TOOL_NAMES,
     format_policy_for_log,
     resolve_tool_policy,
     validate_elevated_tool_call,
 )
 from .utils import text_response as _text_response_helper
+from .workflows import list_workflows_operation, run_workflow_operation
 
 
 def _locale_suggests_pt_br() -> bool:
@@ -168,6 +178,7 @@ from .server_state import ServerState  # noqa: E402 — after configure_logging 
 logger = logging.getLogger("FreeCADMCPserver")
 
 state = ServerState()
+recorder = SessionRecorder.new()
 
 # Tool policy resolved once at import time. Operators control it via
 # ``FREECAD_MCP_DISABLED_TOOLS`` (denylist) or ``FREECAD_MCP_REQUIRED_TOOLS``
@@ -234,6 +245,39 @@ def _guard_tool(tool_name: str):
         return wrapper
 
     return decorator
+
+
+def _observe_tool_call(tool_name: str, args: dict[str, Any]) -> Any:
+    """Record tool args into the in-process replay buffer.
+
+    Called from tool wrappers *before* the body runs so the replay log
+    captures both successful and aborted invocations. Failures here
+    are swallowed — the replay recorder must never break a tool call.
+    """
+    try:
+        recorder.record(tool_name, args or {}, "<in-flight>")
+    except Exception:
+        logger.debug("recorder failed for %s", tool_name, exc_info=True)
+
+
+def _finalize_tool_call(tool_name: str, args: dict[str, Any], result: Any) -> Any:
+    """Update the most recent replay entry with the final result."""
+    try:
+        recorder.record(tool_name, args or {}, result)
+    except Exception:
+        logger.debug("recorder finalize failed for %s", tool_name, exc_info=True)
+    return result
+
+
+def profile_tool(fn):
+    """Decorator that records elapsed time via the in-process profiler.
+
+    The decorator wraps the FastMCP-visible function so each tool call
+    is observed by :func:`freecad_mcp.profiler.get_profiler`. Combine
+    with ``@_guard_tool`` and ``@mcp.tool()`` in any order — the
+    profiler only inspects timing.
+    """
+    return _profile_decorator(fn)
 
 
 @asynccontextmanager
@@ -529,6 +573,7 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
     )
 
 
+@profile_tool
 @_guard_tool("execute_code")
 @mcp.tool()
 def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
@@ -540,7 +585,28 @@ def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
     Returns:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
     """
-    return execute_code_operation(get_freecad_connection(), state.only_text_feedback, code)
+    _observe_tool_call("execute_code", {"code": code})
+    conn = get_freecad_connection()
+    buffer = OutputBuffer()
+    debouncer = ProgressDebouncer(min_interval_s=0.1)
+    try:
+        result = execute_code_operation(conn, state.only_text_feedback, code)
+    except Exception as e:
+        buffer.ingest({"success": False, "error": str(e)})
+        _finalize_tool_call("execute_code", {"code": code}, buffer.full_output())
+        raise
+    if isinstance(result, list):
+        for item in result:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                buffer.ingest({"success": True, "message": text})
+                break
+    else:
+        buffer.ingest({"success": True, "message": str(result)})
+    if debouncer.should_emit():
+        debouncer.mark_emitted()
+    _finalize_tool_call("execute_code", {"code": code}, buffer.full_output())
+    return result
 
 
 @_guard_tool("get_view")
@@ -792,6 +858,202 @@ def health_check(ctx: Context) -> list[TextContent | ImageContent]:
         A JSON object with diagnostic fields.
     """
     return health_check_operation(get_freecad_connection(), state.metrics)
+
+
+# ----------------------------------------------------------------------------
+# v1.1.0 — New high-value features
+# ----------------------------------------------------------------------------
+
+
+@mcp.tool()
+def diff_documents_tool(ctx: Context, doc_a: str, doc_b: str) -> ToolResponse:
+    """Compute a structured diff between two FreeCAD documents.
+
+    Args:
+        doc_a: First document name.
+        doc_b: Second document name.
+
+    Returns:
+        A JSON document with per-object diff categories.
+    """
+    diff: DocumentDiff = diff_documents(get_freecad_connection(), doc_a, doc_b)
+    import json as _json
+
+    payload = diff.as_dict(detailed=True)
+    return _text_response_helper(_json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@mcp.tool()
+def list_workflows(ctx: Context) -> ToolResponse:
+    """List all registered workflows (built-in + custom).
+
+    Returns:
+        A JSON array of ``{name, description, step_count}`` entries.
+    """
+    return list_workflows_operation()
+
+
+@mcp.tool()
+def run_workflow(
+    ctx: Context,
+    name: str,
+    args: dict[str, Any] | None = None,
+) -> ToolResponse:
+    """Execute a registered workflow by name.
+
+    Args:
+        name: Workflow name (from ``list_workflows``).
+        args: Initial argument dictionary used to expand ``{var}``
+            placeholders in each step's args template.
+
+    Returns:
+        A JSON object with the workflow name and per-step results.
+    """
+    _observe_tool_call("run_workflow", {"name": name, "args": args or {}})
+    result = run_workflow_operation(get_freecad_connection(), name, args or {})
+    _finalize_tool_call("run_workflow", {"name": name, "args": args or {}}, result)
+    return result
+
+
+@mcp.tool()
+def get_profiler_stats(ctx: Context) -> ToolResponse:
+    """Return per-tool percentile stats from the in-process profiler.
+
+    Returns:
+        A JSON object mapping tool name to ``{count, mean_ms, p50_ms,
+        p95_ms, p99_ms, max_ms}``.
+    """
+    import json as _json
+
+    profiler: PerformanceProfiler = get_profiler()
+    stats = profiler.get_stats()
+    payload = {
+        "buffer_size": len(profiler),
+        "buffer_max": profiler.max_entries,
+        "slow_threshold_ms": profiler.slow_threshold_ms,
+        "stats": stats,
+        "flamegraph": profiler.export_flamegraph_data(),
+    }
+    return _text_response_helper(_json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@mcp.tool()
+def list_replays(ctx: Context) -> ToolResponse:
+    """List every recorded session replay available on disk.
+
+    Returns:
+        A JSON array of ``{session_id, path, step_count, size_bytes}``.
+    """
+    import json as _json
+
+    from .replay import SessionRecorder
+
+    base = default_replay_dir()
+    entries: list[dict[str, Any]] = []
+    if base.exists():
+        for child in sorted(base.glob("*.json")):
+            sid = child.stem
+            try:
+                rec = SessionRecorder.load(sid)
+                count = len(rec.steps)
+            except Exception:
+                count = 0
+            entries.append({
+                "session_id": sid,
+                "path": str(child),
+                "step_count": count,
+                "size_bytes": child.stat().st_size,
+            })
+    return _text_response_helper(
+        _json.dumps({"count": len(entries), "replays": entries}, indent=2)
+    )
+
+
+@mcp.tool()
+def get_replay(
+    ctx: Context,
+    session_id: str,
+    format: str = "json",
+    dry_run: bool = True,
+) -> ToolResponse:
+    """Fetch a recorded session replay.
+
+    Args:
+        session_id: Replay identifier (from ``list_replays``).
+        format: Either ``"json"`` or ``"markdown"``.
+        dry_run: For ``format="replay"``, whether to skip destructive
+            tool calls (default ``True``). Has no effect on
+            ``"json"``/``"markdown"`` formats.
+
+    Returns:
+        The replay contents as text (JSON or Markdown) plus, for the
+        ``"replay"`` format, a per-step replay report.
+    """
+    from .replay import SessionRecorder
+
+    rec = SessionRecorder.load(session_id)
+    fmt = format.lower()
+    if fmt == "json":
+        return _text_response_helper(rec.export_json())
+    if fmt == "markdown":
+        return _text_response_helper(rec.export_markdown())
+    if fmt == "replay":
+        results = rec.replay(
+            get_freecad_connection(),
+            dry_run=dry_run,
+        )
+        import json as _json
+
+        return _text_response_helper(
+            _json.dumps(
+                {
+                    "session_id": session_id,
+                    "dry_run": dry_run,
+                    "results": [r.to_dict() for r in results],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    return _text_response_helper(f"unknown format: {format!r}; use json|markdown|replay")
+
+
+# ----------------------------------------------------------------------------
+# v1.1.0 — MCP resources (read-only data surfaces)
+# ----------------------------------------------------------------------------
+
+
+@mcp.resource("freecad://server/policy")
+def resource_server_policy() -> str:
+    """Return the currently effective tool policy (enabled set + gate)."""
+    import json as _json
+
+    payload = {
+        "enabled": sorted(_tool_policy.enabled),
+        "denied": sorted(_tool_policy.denied),
+        "elevated_enabled": _tool_policy.elevated_enabled,
+        "elevated_tools": sorted(_tool_policy.elevated_tools),
+        "all_tool_names": sorted(ALL_TOOL_NAMES),
+    }
+    return _json.dumps(payload, indent=2)
+
+
+@mcp.resource("freecad://server/metrics")
+def resource_server_metrics() -> str:
+    """Return a snapshot of the in-process Prometheus-style metrics."""
+    return state.metrics.snapshot_text()
+
+
+@mcp.resource("freecad://server/profiler")
+def resource_server_profiler() -> str:
+    """Return the profiler's per-tool stats as JSON."""
+    return get_profiler_stats(ctx=None)[0].text  # type: ignore[index]
+
+
+@mcp.resource("freecad://server/replay-dir")
+def resource_replay_dir() -> str:
+    """Return the on-disk directory used to persist session replays."""
+    return str(default_replay_dir())
 
 
 @mcp.prompt()

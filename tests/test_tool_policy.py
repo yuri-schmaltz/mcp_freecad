@@ -163,6 +163,13 @@ def test_all_tool_names_known():
         "get_objects", "get_object", "get_parts_list", "list_documents",
         "run_fem_analysis", "undo", "redo", "save_document", "export_object",
         "health_check",
+        # v1.1.0 — added in feature drop F3/F4/F5/F6/F7/F8
+        "diff_documents",
+        "list_workflows",
+        "run_workflow",
+        "get_profiler_stats",
+        "list_replays",
+        "get_replay",
     }
     assert ALL_TOOL_NAMES == frozenset(expected)
 

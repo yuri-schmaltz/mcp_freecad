@@ -62,6 +62,7 @@ def _install_freecad_stub() -> None:
         "QPlainTextEdit",
         "QPushButton",
         "QCheckBox",
+        "QComboBox",
         "QHBoxLayout",
         "QVBoxLayout",
         "QApplication",
@@ -70,6 +71,7 @@ def _install_freecad_stub() -> None:
         "QTextEdit",
         "QInputDialog",
         "QMessageBox",
+        "QSizePolicy",
     )
 
     def _ensure_module(name: str, attrs: dict[str, object]) -> types.ModuleType:
@@ -172,8 +174,22 @@ def _install_freecad_stub() -> None:
         not in (
             "QInputDialog",
             "QMessageBox",
+            "QSizePolicy",
         )
     }
+    qw_attrs["QSizePolicy"] = type(
+        "QSizePolicy",
+        (),
+        {
+            "Normal": 0,
+            "Expanding": 1,
+            "Fixed": 2,
+            "Preferred": 3,
+            "Minimum": 4,
+            "Maximum": 5,
+            "Ignored": 6,
+        },
+    )
     qw_attrs["QInputDialog"] = type(
         "QInputDialog",
         (),

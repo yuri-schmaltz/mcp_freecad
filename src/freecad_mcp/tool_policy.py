@@ -63,6 +63,13 @@ ALL_TOOL_NAMES: frozenset[str] = frozenset({
     "save_document",
     "export_object",
     "health_check",
+    # v1.1.0 — added in feature drop F3/F4/F5/F6/F7/F8
+    "diff_documents",
+    "list_workflows",
+    "run_workflow",
+    "get_profiler_stats",
+    "list_replays",
+    "get_replay",
 })
 
 

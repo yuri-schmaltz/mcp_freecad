@@ -24,6 +24,7 @@ except Exception:  # pragma: no cover - only hit when run outside FreeCAD
     QtCore = QtGui = QtWidgets = None  # type: ignore[assignment]
 
 from . import rpc_server
+from ._prompt_templates import PromptTemplateRegistry
 
 _PANEL_SINGLETON: MCPControlPanel | None = None
 
@@ -109,6 +110,7 @@ class MCPControlPanel(QtWidgets.QWidget):
 
     POLL_INTERVAL_MS = 1000
     PROMPT_HISTORY_ENV = "FREECAD_MCP_OLLAMA_MODEL"
+    THEME_ENV = "FREECAD_MCP_PANEL_THEME"
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
@@ -116,8 +118,15 @@ class MCPControlPanel(QtWidgets.QWidget):
         self.setWindowTitle("FreeCAD MCP")
 
         self._process: QtCore.QProcess | None = None
+        self._theme = "auto"
+        self._template_registry = PromptTemplateRegistry()
         self._build_ui()
         self._wire()
+        self._apply_theme(
+            os.environ.get(self.THEME_ENV, "auto")
+            if os.environ.get(self.THEME_ENV, "auto") in ("light", "dark", "auto")
+            else "auto"
+        )
 
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(self.POLL_INTERVAL_MS)
@@ -135,6 +144,8 @@ class MCPControlPanel(QtWidgets.QWidget):
         # ---- status card
         card = QtWidgets.QFrame()
         card.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        card.setObjectName("MCPCard")
+        self._status_card = card
         card.setStyleSheet(
             "QFrame { background:#f3f4f6; border:1px solid #d1d5db; border-radius:6px; }"
         )
@@ -158,6 +169,8 @@ class MCPControlPanel(QtWidgets.QWidget):
         # ---- prompt card
         prompt_card = QtWidgets.QFrame()
         prompt_card.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        prompt_card.setObjectName("MCPPromptCard")
+        self._prompt_card = prompt_card
         prompt_card.setStyleSheet(
             "QFrame { background:#ffffff; border:1px solid #d1d5db; border-radius:6px; }"
         )
@@ -166,6 +179,17 @@ class MCPControlPanel(QtWidgets.QWidget):
         pc_layout.setSpacing(6)
 
         pc_layout.addWidget(QtWidgets.QLabel("Prompt para o Ollama:"))
+
+        # F2: template selector
+        template_row = QtWidgets.QHBoxLayout()
+        template_row.addWidget(QtWidgets.QLabel("Template:"))
+        self.template_combo = QtWidgets.QComboBox()
+        self.template_combo.addItem("(escolha um template)")
+        for name in self._template_registry.names():
+            self.template_combo.addItem(name)
+        template_row.addWidget(self.template_combo, 1)
+        pc_layout.addLayout(template_row)
+
         self.prompt_edit = QtWidgets.QPlainTextEdit()
         self.prompt_edit.setPlaceholderText(
             "Ex.: liste os documentos abertos no FreeCAD e rode health_check."
@@ -198,11 +222,15 @@ class MCPControlPanel(QtWidgets.QWidget):
 
         self.log_view = QtWidgets.QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setObjectName("MCPLogView")
         self.log_view.setStyleSheet(
             "QPlainTextEdit { background:#0b1020; color:#d1d5db; "
             "font-family: 'DejaVu Sans Mono', monospace; font-size:11px; }"
         )
         self.log_view.setMinimumHeight(140)
+        self.log_view.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
         pc_layout.addWidget(self.log_view, 1)
 
         root.addWidget(prompt_card, 1)
@@ -213,6 +241,83 @@ class MCPControlPanel(QtWidgets.QWidget):
         self.toggle_btn.clicked.connect(self._on_toggle)
         self.send_btn.clicked.connect(self._on_send)
         self.clear_btn.clicked.connect(self.log_view.clear)
+        self.template_combo.currentTextChanged.connect(self._on_template_chosen)
+
+    # ----- F2: template chooser ------------------------------------------
+
+    def _on_template_chosen(self, name: str) -> None:
+        if not name or name == "(escolha um template)":
+            return
+        tpl = self._template_registry.get(name)
+        if tpl is None:
+            return
+        try:
+            rendered = tpl.prompt.format(
+                doc_name="Untitled", doc_a="DocA", doc_b="DocB",
+            )
+        except Exception:
+            rendered = tpl.prompt
+        self.prompt_edit.setPlainText(rendered)
+        self._append_log(f"[mcp] template '{name}' carregado no prompt.\n")
+
+    # ----- F9: theme switching -------------------------------------------
+
+    def _apply_theme(self, theme: str) -> None:
+        """Apply 'light', 'dark', or 'auto' (uses FreeCAD palette if available)."""
+        self._theme = theme
+        effective = theme
+        if theme == "auto":
+            try:
+                import FreeCADGui
+
+                mw = FreeCADGui.getMainWindow()
+                base_color = mw.palette().color(QtGui.QPalette.Window)
+                luminance = (
+                    0.2126 * base_color.red()
+                    + 0.7152 * base_color.green()
+                    + 0.0722 * base_color.blue()
+                )
+                effective = "dark" if luminance < 128 else "light"
+            except Exception:
+                effective = "light"
+        if effective == "dark":
+            self._set_dark_theme()
+        else:
+            self._set_light_theme()
+
+    def _set_light_theme(self) -> None:
+        self._status_card.setStyleSheet(
+            "QFrame { background:#f3f4f6; border:1px solid #d1d5db; border-radius:6px; }"
+        )
+        self._prompt_card.setStyleSheet(
+            "QFrame { background:#ffffff; border:1px solid #d1d5db; border-radius:6px; }"
+        )
+        self.log_view.setStyleSheet(
+            "QPlainTextEdit { background:#0b1020; color:#d1d5db; "
+            "font-family: 'DejaVu Sans Mono', monospace; font-size:11px; }"
+        )
+
+    def _set_dark_theme(self) -> None:
+        self._status_card.setStyleSheet(
+            "QFrame { background:#1f2937; border:1px solid #374151; border-radius:6px; }"
+            "QLabel { color:#e5e7eb; }"
+        )
+        self._prompt_card.setStyleSheet(
+            "QFrame { background:#111827; border:1px solid #374151; border-radius:6px; }"
+            "QLabel { color:#e5e7eb; }"
+            "QLineEdit, QPlainTextEdit, QComboBox { background:#0b1220; color:#e5e7eb; "
+            "border:1px solid #374151; border-radius:4px; padding:4px; }"
+        )
+        self.log_view.setStyleSheet(
+            "QPlainTextEdit { background:#000000; color:#a7f3d0; "
+            "font-family: 'DejaVu Sans Mono', monospace; font-size:11px; }"
+        )
+
+    def cycle_theme(self) -> None:
+        """Cycle light → dark → auto → light."""
+        order = {"light": "dark", "dark": "auto", "auto": "light"}
+        self._apply_theme(order.get(self._theme, "light"))
+        self._append_log(f"[mcp] theme → {self._theme}\n")
 
     # ----- status ----------------------------------------------------------
 
@@ -381,6 +486,13 @@ def show_panel() -> MCPControlPanel:
     dock.show()
     dock.raise_()
     return panel
+
+
+def cycle_theme() -> None:
+    """Cycle theme on the singleton panel. No-op if the panel isn't shown yet."""
+    panel = _PANEL_SINGLETON
+    if panel is not None:
+        panel.cycle_theme()
 
 
 def notify_status_change() -> None:

@@ -125,15 +125,20 @@ def test_settings_under_contention_does_not_clobber(settings_pkg):
 # ----------------------------------------------------------------------
 
 
-def test_start_rpc_server_rolls_back_on_filtered_constructor_failure(load_rpc_server):
+def test_start_rpc_server_rolls_back_on_filtered_constructor_failure(load_rpc_server, monkeypatch):
     """If FilteredXMLRPCServer raises, the module globals stay clean.
 
     Uses the ``load_rpc_server`` fixture to obtain a freshly-loaded
     module under a synthetic package so prior tests cannot pollute
     the module-level ``rpc_server_instance`` / ``rpc_server_thread``
     globals.
+
+    ``load_settings`` is patched to return defaults so this test does
+    not depend on whatever the user's ``freecad_mcp_settings.json``
+    happens to contain on the host running the test suite.
     """
     mod = load_rpc_server()
+    monkeypatch.setattr(mod, "load_settings", lambda: {"remote_enabled": False, "allowed_ips": "127.0.0.1"})
 
     class BoomServer:
         def __init__(self, *a, **k):

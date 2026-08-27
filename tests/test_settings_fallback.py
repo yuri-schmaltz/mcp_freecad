@@ -14,7 +14,20 @@ for name in ("FreeCAD", "FreeCADGui", "ObjectsFem", "PySide"):
     if name not in sys.modules:
         sys.modules[name] = types.ModuleType(name)
 
-_fc = sys.modules["FreeCAD"]
+# ``_fc`` is a thin proxy over ``sys.modules['FreeCAD']`` so tests can
+# keep using ``_fc.foo = bar`` even when an earlier-imported test file
+# replaces the sys.modules entry at import time. Without this proxy,
+# the module-level reference would be stale and subsequent tests would
+# silently miss the patched attribute.
+class _FreeCADProxy:
+    def __getattr__(self, name):
+        return getattr(sys.modules["FreeCAD"], name)
+
+    def __setattr__(self, name, value):
+        setattr(sys.modules["FreeCAD"], name, value)
+
+
+_fc = _FreeCADProxy()
 _fc.Console = types.SimpleNamespace(
     PrintWarning=lambda *a, **k: None,
     PrintMessage=lambda *a, **k: None,
@@ -75,6 +88,11 @@ def _load_rpc_server():
     mod = importlib.util.module_from_spec(spec)
     sys.modules["_rs_pkg_sf.rpc_server"] = mod
     spec.loader.exec_module(mod)
+    # Force the rpc_server's FreeCAD reference to the live sys.modules
+    # entry — earlier test modules (e.g. test_parts_list_cache) replace
+    # ``sys.modules['FreeCAD']`` at module-import time so the reference
+    # captured during ``exec_module`` may be stale.
+    mod.FreeCAD = sys.modules["FreeCAD"]
     return mod
 
 

@@ -157,9 +157,12 @@ def ins_mod(monkeypatch):
     mod = importlib.util.module_from_spec(spec)
     sys.modules["_inspection_for_test"] = mod
     # Inject the fake FreeCAD before exec_module (the module imports it).
+    # Use monkeypatch so the real ``FreeCAD`` entry in sys.modules is
+    # restored after the test — otherwise subsequent tests that import
+    # the real rpc_server see a broken FreeCAD stub and explode.
     fake_pkg = types.ModuleType("FreeCAD")
     fake_pkg.ActiveDocument = None
-    sys.modules["FreeCAD"] = fake_pkg
+    monkeypatch.setitem(sys.modules, "FreeCAD", fake_pkg)
     # Patch the module-level reference after import.
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     monkeypatch.setattr(mod, "FreeCAD", _FakeFreeCAD)

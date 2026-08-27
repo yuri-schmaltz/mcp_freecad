@@ -89,6 +89,11 @@ rpc_server = importlib.util.module_from_spec(spec)
 sys.modules["_rs_pkg_lifecycle.rpc_server"] = rpc_server
 spec.loader.exec_module(rpc_server)  # type: ignore[union-attr]
 
+# Isolate from the user's real freecad_mcp_settings.json: force defaults so
+# ``remote_enabled`` never trips the security-gate refusal branch during
+# these tests.
+rpc_server.load_settings = lambda: {"remote_enabled": False, "allowed_ips": "127.0.0.1"}
+
 
 # ---- Test infrastructure: replace FilteredXMLRPCServer + the thread -----
 

@@ -114,12 +114,15 @@ def cam_mod(monkeypatch):
     )
     mod = importlib.util.module_from_spec(spec)
     # Pre-stub FreeCAD so the module's top-level import succeeds.
-    sys.modules["FreeCAD"] = fake_freecad
-    sys.modules["Path"] = sys.modules["Path"]
-    sys.modules["PathScripts"] = sys.modules["PathScripts"]
-    sys.modules["PathTool"] = sys.modules["PathTool"]
-    sys.modules["PathToolController"] = sys.modules["PathToolController"]
-    sys.modules["PathScripts.tools"] = sys.modules["PathScripts.tools"]
+    # Use monkeypatch so the real ``FreeCAD`` (and friends) are restored
+    # after the test — otherwise subsequent tests that import the real
+    # rpc_server see the broken stub and explode.
+    monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
+    monkeypatch.setitem(sys.modules, "Path", sys.modules["Path"])
+    monkeypatch.setitem(sys.modules, "PathScripts", sys.modules["PathScripts"])
+    monkeypatch.setitem(sys.modules, "PathTool", sys.modules["PathTool"])
+    monkeypatch.setitem(sys.modules, "PathToolController", sys.modules["PathToolController"])
+    monkeypatch.setitem(sys.modules, "PathScripts.tools", sys.modules["PathScripts.tools"])
     sys.modules["_cam_ops_for_test"] = mod
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     # Re-patch FreeCAD after exec (the module already grabbed it).

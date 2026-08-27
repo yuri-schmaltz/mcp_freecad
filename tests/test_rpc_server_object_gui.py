@@ -240,6 +240,11 @@ def _restore_shims():
     # from a known state, regardless of what previous tests in the
     # suite (in any file) may have done to FreeCAD's module attrs.
     _apply_canonical_shims()
+    # Other test files (e.g. test_parts_list_cache) replace
+    # ``sys.modules['FreeCAD']`` at module-import time, so the reference
+    # captured when ``rpc_server`` was first loaded may now point at a
+    # stale ModuleType. Rebind so the rpc_server sees the patched shims.
+    rpc_server.FreeCAD = sys.modules["FreeCAD"]
     _fc_snapshot = dict(vars(_fc))
     yield
     # Restore ObjectsFem to the module-load snapshot.
@@ -270,8 +275,10 @@ def _restore_shims():
 def test_create_document_gui_runs_recompute():
     _reset_docs()
     # Force the canonical newDocument lambda (a previous test may have
-    # polluted it).
-    _fc.newDocument = lambda name: _make_doc_and_register(name)
+    # polluted it). Use ``sys.modules['FreeCAD']`` (the live entry)
+    # because other test modules may have replaced it after this file's
+    # module-level captured the reference.
+    sys.modules["FreeCAD"].newDocument = lambda name: _make_doc_and_register(name)
     out = rpc_server.FreeCADRPC()._create_document_gui("Doc1")
     assert out is True
     assert "Doc1" in _docs

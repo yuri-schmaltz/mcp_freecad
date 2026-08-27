@@ -162,6 +162,13 @@ def _restore_active_document():
     screenshot tests with a saveImage that doesn't write a PNG.
     """
     sys.modules["FreeCADGui"].ActiveDocument = _FakeActiveDoc()
+    # Other test files (e.g. test_parts_list_cache) replace
+    # ``sys.modules['FreeCAD']`` at module-import time, so the reference
+    # captured when ``rpc_server`` was first loaded may now point at a
+    # stale ModuleType. Rebind to the current sys.modules entry so the
+    # rpc_server sees the patched stubs (newDocument, getDocument,
+    # listDocuments, …) used by the tests below.
+    rpc_server.FreeCAD = sys.modules["FreeCAD"]
     yield
     # No teardown needed — the next test will re-apply.
 

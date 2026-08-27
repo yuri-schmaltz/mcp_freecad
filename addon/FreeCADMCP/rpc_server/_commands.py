@@ -18,6 +18,8 @@ The five commands are:
 """
 from __future__ import annotations
 
+import contextlib
+
 from ._dispatch import rpc_server_instance
 from ._settings import load_settings, save_settings
 
@@ -234,14 +236,21 @@ class ToggleAutoStartCommand:
         return True
 
 
+# Cap so a FreeCAD where getMainWindow() never returns a usable menu
+# doesn't leak one QTimer per retry forever.
+_SYNC_MAX_ATTEMPTS = 5
+_SYNC_ATTEMPTS_LEFT = _SYNC_MAX_ATTEMPTS
+
+
 def _sync_toggle_states():
     """Sync checkable menu items with saved settings on startup.
 
     FreeCAD may construct the menu before the settings file has been
-    read; we retry for a few seconds before giving up. This is the
-    same pattern as the original ``rpc_server`` module, extracted here
-    so the menu code lives in one place.
+    read; we retry for a few seconds before giving up. Capped at
+    ``_SYNC_MAX_ATTEMPTS`` so headless / broken installs don't leak a
+    QTimer per retry forever.
     """
+    global _SYNC_ATTEMPTS_LEFT
     try:
         import FreeCADGui
     except Exception:
@@ -264,9 +273,15 @@ def _sync_toggle_states():
                 action.setChecked(toggle_map[action.text()])
                 found += 1
                 if found == len(toggle_map):
+                    _SYNC_ATTEMPTS_LEFT = _SYNC_MAX_ATTEMPTS
                     return
     except Exception:
         pass
+
+    _SYNC_ATTEMPTS_LEFT -= 1
+    if _SYNC_ATTEMPTS_LEFT <= 0:
+        # Stop rescheduling and let the user manually toggle if needed.
+        return
     # Retry if menu not ready yet
     QtCore.QTimer.singleShot(2000, _sync_toggle_states)
 
@@ -309,7 +324,7 @@ class ToggleRPCServerCommand:
             running = False
         try:
             import FreeCADGui
-            from PySide import QtCore, QtWidgets
+            from PySide import QtWidgets
 
             action = FreeCADGui.getMainWindow().findChild(
                 QtWidgets.QAction, "ToggleRPCServer"
@@ -325,18 +340,14 @@ class ToggleRPCServerCommand:
         from . import rpc_server
 
         msg = rpc_server.toggle_rpc_server()
-        try:
+        with contextlib.suppress(Exception):
             __import__("FreeCAD").Console.PrintMessage(f"[MCP] {msg}\n")
-        except Exception:
-            pass
         self._refresh_label()
         # Notify the dock panel if it is open.
-        try:
+        with contextlib.suppress(Exception):
             from ._panel import notify_status_change
 
             notify_status_change()
-        except Exception:
-            pass
 
     def IsActive(self):
         return True

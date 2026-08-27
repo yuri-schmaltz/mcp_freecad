@@ -1,7 +1,13 @@
 import os
 
-import FreeCAD
-import FreeCADGui
+try:
+    import FreeCAD
+    import FreeCADGui
+except Exception:
+    # Module loaded outside FreeCAD during unit tests; the test
+    # harness injects FreeCAD stubs as needed.
+    FreeCAD = None  # type: ignore[assignment]
+    FreeCADGui = None  # type: ignore[assignment]
 
 
 def _safe_resolve(parts_lib_path: str, relative_path: str) -> str:
@@ -28,6 +34,11 @@ def _safe_resolve(parts_lib_path: str, relative_path: str) -> str:
 
 
 def insert_part_from_library(relative_path):
+    if FreeCAD is None or FreeCADGui is None:
+        raise RuntimeError(
+            "FreeCAD is not available; insert_part_from_library requires a "
+            "running FreeCAD session."
+        )
     parts_lib_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "parts_library")
     part_path = _safe_resolve(parts_lib_path, relative_path)
 
@@ -92,6 +103,10 @@ def get_parts_list() -> list[str]:
     returned list is a defensive copy; mutating it does not poison the
     cache.
     """
+    if FreeCAD is None:
+        raise RuntimeError(
+            "FreeCAD is not available; get_parts_list requires a running FreeCAD session."
+        )
     parts_lib_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "parts_library")
 
     if not os.path.exists(parts_lib_path):

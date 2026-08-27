@@ -326,6 +326,140 @@ def test_verify_request_rejects_unparseable_ip():
         server.server_close()
 
 
+# ----------------------------------------------------------------------
+# v1.0.4 gauntlet — rewrite of parse_request + helper plumbing
+# ----------------------------------------------------------------------
+
+
+def test_filtered_server_has_parse_request_override():
+    """The override must exist and be a regular function (not the stdlib one)."""
+    rpc_mod = _load_rpc_server()
+    assert callable(rpc_mod.FilteredXMLRPCServer.parse_request)
+    # Should be defined on FilteredXMLRPCServer itself (override), not inherited.
+    assert "parse_request" in rpc_mod.FilteredXMLRPCServer.__dict__
+
+
+def test_filtered_server_has_auth_path_method():
+    """The new ``_parse_request_with_auth`` method must exist."""
+    rpc_mod = _load_rpc_server()
+    assert callable(getattr(rpc_mod.FilteredXMLRPCServer, "_parse_request_with_auth", None))
+
+
+def test_old_double_read_helper_is_removed():
+    """The bug-causing helper must be gone."""
+    rpc_mod = _load_rpc_server()
+    assert not hasattr(rpc_mod.FilteredXMLRPCServer, "_read_request_headers_for_auth")
+
+
+def test_get_request_accept_timeout_constant_exists():
+    rpc_mod = _load_rpc_server()
+    assert hasattr(rpc_mod.FilteredXMLRPCServer, "_ACCEPT_TIMEOUT_S")
+    assert hasattr(rpc_mod.FilteredXMLRPCServer, "_AUTH_HEADER_TIMEOUT_S")
+    assert rpc_mod.FilteredXMLRPCServer._ACCEPT_TIMEOUT_S > 0
+    assert rpc_mod.FilteredXMLRPCServer._AUTH_HEADER_TIMEOUT_S > 0
+
+
+def test_parse_request_with_auth_rejects_when_check_auth_returns_false(monkeypatch):
+    """Direct unit test of _parse_request_with_auth: bad token → 401.
+
+    Uses a tiny stub with only the attributes the method reads. We
+    patch ``http.client.parse_headers`` to return a fake message dict so
+    the test does not need to wire up the full stdlib MRO.
+    """
+    rpc_mod = _load_rpc_server()
+    import email.message
+
+    hdr = email.message.Message()
+    hdr["Authorization"] = "Bearer WRONG"
+
+    # Patch parse_headers to return our fake message; this avoids the
+    # need to instantiate the real SimpleXMLRPCRequestHandler.
+    def _fake_parse_headers(fp, _class=None):
+        return hdr
+
+    monkeypatch.setattr(rpc_mod.http.client, "parse_headers", _fake_parse_headers)
+
+    class _Rfile:
+        def readline(self, *_a, **_k):
+            return b""
+
+        def close(self):
+            pass
+
+    class Handler:
+        # Only the attributes _parse_request_with_auth actually reads.
+        raw_requestline = b"POST /RPC2 HTTP/1.1\r\n"
+        MessageClass = email.message.Message
+        default_request_version = "HTTP/1.0"
+        request_version = "HTTP/1.1"
+        protocol_version = "HTTP/1.1"
+        close_connection = False
+        client_address = ("127.0.0.1", 54321)
+        command = "POST"
+        path = "/RPC2"
+        headers = hdr
+        rfile = _Rfile()
+
+        def _check_auth(self, _t):
+            return False
+
+        def send_error(self, code, msg="", explain=""):
+            self._sent_code = code
+            self._sent_msg = msg
+
+    h = Handler()
+    result = rpc_mod.FilteredXMLRPCServer._parse_request_with_auth(h)
+    assert result is False
+    assert h._sent_code == 401
+
+
+def test_parse_request_with_auth_accepts_when_check_auth_passes(monkeypatch):
+    rpc_mod = _load_rpc_server()
+    import email.message
+
+    hdr = email.message.Message()
+    hdr["Authorization"] = "Bearer correct"
+    hdr["Content-Length"] = "0"
+
+    def _fake_parse_headers(fp, _class=None):
+        return hdr
+
+    monkeypatch.setattr(rpc_mod.http.client, "parse_headers", _fake_parse_headers)
+
+    class _Rfile:
+        def readline(self, *_a, **_k):
+            return b""
+
+        def close(self):
+            pass
+
+    class Handler:
+        raw_requestline = b"POST /RPC2 HTTP/1.1\r\n"
+        MessageClass = email.message.Message
+        default_request_version = "HTTP/1.0"
+        request_version = "HTTP/1.1"
+        protocol_version = "HTTP/1.1"
+        close_connection = False
+        client_address = ("127.0.0.1", 54321)
+        command = "POST"
+        path = "/RPC2"
+        headers = hdr
+        rfile = _Rfile()
+
+        def _check_auth(self, _t):
+            return True
+
+        def handle_expect_100(self):
+            return True
+
+        def send_error(self, code, msg="", explain=""):
+            self._sent_code = code
+
+    h = Handler()
+    result = rpc_mod.FilteredXMLRPCServer._parse_request_with_auth(h)
+    assert result is True
+
+
 if __name__ == "__main__":
     test_get_auth_token_none_by_default()
     test_get_auth_token_reads_env()
@@ -337,4 +471,10 @@ if __name__ == "__main__":
     test_tls_context_loaded_from_pem()
     test_tls_missing_cert_disables_tls()
     test_tls_bad_cert_path_disables_tls()
+    test_filtered_server_has_parse_request_override()
+    test_filtered_server_has_auth_path_method()
+    test_old_double_read_helper_is_removed()
+    test_get_request_accept_timeout_constant_exists()
+    test_parse_request_with_auth_rejects_when_check_auth_returns_false()
+    test_parse_request_with_auth_accepts_when_check_auth_passes()
     print("All TLS + auth tests passed")

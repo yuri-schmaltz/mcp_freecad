@@ -138,6 +138,60 @@ def resolve_tool_policy() -> ToolPolicy:
     return ToolPolicy(enabled=ALL_TOOL_NAMES)
 
 
+# Tools that, when exposed, additionally require an explicit elevation
+# token. The token is checked at the per-tool wrapper level so a stolen
+# ``FREECAD_MCP_DISABLED_TOOLS`` env var alone cannot unlock these.
+ELEVATED_TOOLS: frozenset[str] = frozenset({"execute_code", "run_fem_analysis"})
+
+
+def is_tool_elevated(name: str) -> bool:
+    """Return True if *name* is one of the elevated/dangerous tools."""
+    return name in ELEVATED_TOOLS
+
+
+def elevated_tools_enabled() -> bool:
+    """``True`` when the operator opted into elevated tools.
+
+    Controlled by ``FREECAD_MCP_ALLOW_ELEVATED_TOOLS=1``. Default is
+    **disabled** — operators must opt in explicitly. This is separate
+    from ``FREECAD_MCP_DISABLED_TOOLS`` so a misconfigured denylist
+    cannot re-enable ``execute_code`` by accident.
+    """
+    flag = os.environ.get("FREECAD_MCP_ALLOW_ELEVATED_TOOLS", "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def validate_elevated_tool_call(name: str, has_token: bool) -> str | None:
+    """Return ``None`` if *name* is allowed to run, else a human-readable reason.
+
+    The check is layered: even if ``elevated_tools_enabled()`` is True,
+    an elevated tool still needs ``has_token=True`` (the client must
+    have called :meth:`FreeCADConnection.set_bearer_token`). A
+    non-elevated tool always passes; a missing token on an
+    enabled-elevated tool produces a message that names the env var
+    the operator must set.
+
+    Tests should assert against ``reason is None`` / ``"token" in reason``
+    rather than the exact wording so future rewording doesn't break
+    the suite.
+    """
+    if not is_tool_elevated(name):
+        return None
+    if not elevated_tools_enabled():
+        return (
+            f"Tool '{name}' is elevated and is disabled because "
+            f"FREECAD_MCP_ALLOW_ELEVATED_TOOLS is not set to 1."
+        )
+    if not has_token:
+        return (
+            f"Tool '{name}' is elevated and requires a bearer token. "
+            f"Set FREECAD_MCP_AUTH_TOKEN on the FreeCAD server and call "
+            f"FreeCADConnection.set_bearer_token(token) before invoking "
+            f"this tool."
+        )
+    return None
+
+
 def format_policy_for_log(policy: ToolPolicy) -> str:
     """One-line description for the boot log."""
     n_total = len(ALL_TOOL_NAMES)
@@ -154,7 +208,11 @@ def format_policy_for_log(policy: ToolPolicy) -> str:
 
 __all__ = [
     "ALL_TOOL_NAMES",
+    "ELEVATED_TOOLS",
     "ToolPolicy",
     "resolve_tool_policy",
     "format_policy_for_log",
+    "is_tool_elevated",
+    "elevated_tools_enabled",
+    "validate_elevated_tool_call",
 ]

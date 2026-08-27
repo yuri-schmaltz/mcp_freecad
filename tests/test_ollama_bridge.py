@@ -4,7 +4,6 @@ We don't need a real Ollama server or a real MCP server here — we
 stub the Ollama HTTP roundtrip and the MCP session so the bridge
 loop can be exercised end-to-end on its own.
 """
-import asyncio
 import sys
 import types
 from pathlib import Path
@@ -180,9 +179,9 @@ class _PatchSessionCM:
     async def __aexit__(self, *exc): return False
 
 
-def test_ask_one_tool_call_returns_final_answer(patched_bridge):
+async def test_ask_one_tool_call_returns_final_answer(patched_bridge):
     bridge, sess, http = patched_bridge
-    out = asyncio.run(bridge.ask("hello?", model="qwen3.6:27b"))
+    out = await bridge.ask("hello?", model="qwen3.6:27b")
     assert out == "Done. Final answer."
     # The bridge invoked the echo tool once with the right args.
     assert sess.calls == [("echo", {"msg": "hi"})]
@@ -190,7 +189,7 @@ def test_ask_one_tool_call_returns_final_answer(patched_bridge):
     assert len(http.calls) == 2
 
 
-def test_ask_raises_when_model_keeps_calling_tools(monkeypatch):
+async def test_ask_raises_when_model_keeps_calling_tools(monkeypatch):
     cfg = ob.OllamaBridgeConfig(max_tool_iterations=2)
     bridge = ob.OllamaMCPBridge(cfg)
     http = _FakeHttp([
@@ -214,10 +213,10 @@ def test_ask_raises_when_model_keeps_calling_tools(monkeypatch):
     monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
 
     with pytest.raises(ob.BridgeError, match="max_tool_iterations"):
-        asyncio.run(bridge.ask("loop forever?", model="qwen3.6:27b"))
+        await bridge.ask("loop forever?", model="qwen3.6:27b")
 
 
-def test_ask_returns_content_when_no_tool_calls(monkeypatch):
+async def test_ask_returns_content_when_no_tool_calls(monkeypatch):
     cfg = ob.OllamaBridgeConfig(max_tool_iterations=4)
     bridge = ob.OllamaMCPBridge(cfg)
     http = _FakeHttp([
@@ -232,11 +231,11 @@ def test_ask_returns_content_when_no_tool_calls(monkeypatch):
     async def _fake_open_mcp(): return _Open()
     bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
     monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
-    out = asyncio.run(bridge.ask("any q", model="qwen3.6:27b"))
+    out = await bridge.ask("any q", model="qwen3.6:27b")
     assert out == "Straight answer."
 
 
-def test_ask_tool_failure_is_surfaced_not_raised(monkeypatch):
+async def test_ask_tool_failure_is_surfaced_not_raised(monkeypatch):
     """If a tool call raises, the bridge catches it and passes an error
     payload as a tool message back to the model — the loop survives."""
     cfg = ob.OllamaBridgeConfig(max_tool_iterations=4)
@@ -263,5 +262,5 @@ def test_ask_tool_failure_is_surfaced_not_raised(monkeypatch):
     bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
     monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
 
-    out = asyncio.run(bridge.ask("go", model="qwen3.6:27b"))
+    out = await bridge.ask("go", model="qwen3.6:27b")
     assert "recovered" in out

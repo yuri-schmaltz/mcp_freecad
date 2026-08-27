@@ -1,7 +1,8 @@
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Literal
@@ -31,7 +32,11 @@ from .operations import (
     undo_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
-from .tool_policy import format_policy_for_log, resolve_tool_policy
+from .tool_policy import (
+    format_policy_for_log,
+    resolve_tool_policy,
+    validate_elevated_tool_call,
+)
 from .utils import text_response as _text_response_helper
 
 
@@ -180,7 +185,20 @@ logger.info(format_policy_for_log(_tool_policy))
 
 
 def _guard_tool(tool_name: str):
-    """Decorator that blocks the wrapped tool when *tool_name* is disabled.
+    """Decorator that enforces the tool policy AND the elevated-tool auth gate.
+
+    Two-stage guard, in this order:
+
+    1. Tool policy (FREECAD_MCP_DISABLED_TOOLS /
+       FREECAD_MCP_REQUIRED_TOOLS) — disables the tool entirely.
+    2. Elevated-tool auth — when *tool_name* is in
+       :data:`tool_policy.ELEVATED_TOOLS`, the operator must have
+       enabled the feature (``FREECAD_MCP_ALLOW_ELEVATED_TOOLS=1``)
+       AND the live FreeCADConnection must have a bearer token
+       configured via :meth:`FreeCADConnection.set_bearer_token`.
+       We probe this *here* (before delegating to the tool body) so
+       the LLM sees a clear, unified error message instead of a
+       protocol-level RPC failure.
 
     Disabled tools return a ``text_response`` with an actionable error
     so the LLM gets a clear signal that the tool is unavailable (and
@@ -192,6 +210,7 @@ def _guard_tool(tool_name: str):
     allows it.
     """
     from functools import wraps
+
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -203,8 +222,17 @@ def _guard_tool(tool_name: str):
                 )
                 logger.warning("blocked call to disabled tool: %s", tool_name)
                 return _text_response_helper(msg)
+            # Elevated-tool auth gate (only when the tool is enabled).
+            conn = state.freecad_connection
+            has_token = bool(conn and conn._bearer_token)
+            reason = validate_elevated_tool_call(tool_name, has_token)
+            if reason is not None:
+                logger.warning("blocked elevated tool %s: %s", tool_name, reason)
+                return _text_response_helper(reason)
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -253,8 +281,37 @@ mcp = FastMCP(
 )
 
 
+# Re-validate the cached connection at most this often. The default
+# ``ping()`` is a single round-trip on the local socket; cheap enough
+# that once-per-N-seconds is invisible to users but stops a stale
+# connection from hanging the first call after FreeCAD restart.
+_LIVENESS_CHECK_S = float(os.environ.get("FREECAD_MCP_LIVENESS_CHECK_S", "30"))
+_LIVENESS_LAST_OK: dict[str, float] = {}
+
+
 def get_freecad_connection() -> FreeCADConnection:
-    """Get or create a persistent FreeCAD connection"""
+    """Get or create a persistent FreeCAD connection.
+
+    Probes the connection with a ``ping()`` at most every
+    ``FREECAD_MCP_LIVENESS_CHECK_S`` seconds (default 30). Without this
+    check, a stale connection from a previous FreeCAD session would
+    hang every tool call until the breaker finally opened.
+    """
+    now = time.monotonic()
+    last_ok = _LIVENESS_LAST_OK.get("t", 0.0)
+    if (
+        state.freecad_connection is not None
+        and (now - last_ok) >= _LIVENESS_CHECK_S
+        and not state.freecad_connection.ping()
+    ):
+        logger.warning(
+            "FreeCAD connection stale; reconnecting (last ok %.1fs ago)",
+            now - last_ok,
+        )
+        with suppress(Exception):
+            state.freecad_connection.disconnect()
+        state.freecad_connection = None
+
     if state.freecad_connection is None:
         state.freecad_connection = FreeCADConnection(host=state.rpc_host, port=9875)
         if not state.freecad_connection.ping():
@@ -263,6 +320,8 @@ def get_freecad_connection() -> FreeCADConnection:
             raise Exception(
                 "Failed to connect to FreeCAD. Make sure the FreeCAD addon is running."
             )
+
+    _LIVENESS_LAST_OK["t"] = now
     return state.freecad_connection
 
 

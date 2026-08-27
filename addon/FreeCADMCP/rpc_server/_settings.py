@@ -11,9 +11,11 @@ touching the call sites.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
+import threading
 from typing import Any
 
 try:
@@ -22,6 +24,12 @@ except Exception:
     # Module is loaded outside FreeCAD during unit tests. Provide a
     # placeholder so the imports below don't blow up.
     FreeCAD = None  # type: ignore[assignment]
+
+# Re-entrant lock serialising every load/save call. Several FreeCAD
+# toolbar commands (Remote Connections, Configure Allowed IPs, Auto-Start)
+# all do read-modify-write on the same JSON file; without this guard a
+# fast user clicking them in sequence clobbers the previous write.
+_SETTINGS_LOCK = threading.RLock()
 
 
 _SETTINGS_FILENAME = "freecad_mcp_settings.json"
@@ -149,32 +157,82 @@ def load_settings() -> dict[str, Any]:
     back-filled with the missing keys.
     """
     path = _get_settings_path()
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                settings = json.load(f)
-            # Ensure all default keys exist
-            for key, value in _DEFAULT_SETTINGS.items():
-                if key not in settings:
-                    settings[key] = value
-            return settings
-        except Exception as e:
-            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-                FreeCAD.Console.PrintWarning(f"Failed to load MCP settings from {path}: {e}\n")
-    return dict(_DEFAULT_SETTINGS)
+    with _SETTINGS_LOCK:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    settings = json.load(f)
+                # Ensure all default keys exist
+                for key, value in _DEFAULT_SETTINGS.items():
+                    if key not in settings:
+                        settings[key] = value
+                return settings
+            except json.JSONDecodeError as e:
+                # Quarantine the broken file so the next save does not
+                # silently overwrite the user's data, then return defaults.
+                _quarantine_broken_settings(path, e)
+                return dict(_DEFAULT_SETTINGS)
+            except (OSError, PermissionError) as e:
+                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                    FreeCAD.Console.PrintWarning(
+                        f"Failed to read MCP settings from {path}: {e}\n"
+                    )
+            except Exception as e:  # pragma: no cover - defensive
+                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                    FreeCAD.Console.PrintWarning(
+                        f"Failed to load MCP settings from {path}: {e}\n"
+                    )
+        return dict(_DEFAULT_SETTINGS)
 
 
 def save_settings(settings: dict[str, Any]) -> None:
-    """Persist *settings* to disk; log an error on I/O failure."""
+    """Persist *settings* to disk; log an error on I/O failure.
+
+    The write is atomic: settings are written to ``<path>.tmp`` next to
+    the target, fsync'd, and then ``os.replace``'d over the live file.
+    This avoids a torn JSON file if the process is killed mid-write.
+    """
     path = _get_settings_path()
+    with _SETTINGS_LOCK:
+        try:
+            _ensure_dir(os.path.dirname(path))
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(settings, f, indent=2)
+                f.flush()
+                with contextlib.suppress(OSError, AttributeError):
+                    # Some filesystems (e.g. tmpfs) reject fsync; tolerate it.
+                    os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except Exception as e:
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintError(
+                    f"Failed to save MCP settings to {path}: {e}\n"
+                )
+
+
+def _quarantine_broken_settings(path: str, exc: Exception) -> None:
+    """Move a corrupt settings file aside so the user can recover it.
+
+    Without this, the next successful ``save_settings`` would silently
+    overwrite the user's last-known-good config.
+    """
     try:
-        # Make sure the directory exists (idempotent) before opening for write.
-        _ensure_dir(os.path.dirname(path))
-        with open(path, "w") as f:
-            json.dump(settings, f, indent=2)
-    except Exception as e:
+        import time
+
+        broken = f"{path}.broken-{int(time.time())}"
+        os.replace(path, broken)
         if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-            FreeCAD.Console.PrintError(f"Failed to save MCP settings to {path}: {e}\n")
+            FreeCAD.Console.PrintWarning(
+                f"MCP settings: {path} is corrupt ({exc!r}); moved aside to {broken}. "
+                "Defaults will be used until you restore it manually.\n"
+            )
+    except Exception:
+        # Last-ditch: just warn. save_settings will overwrite on next call.
+        if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+            FreeCAD.Console.PrintWarning(
+                f"MCP settings: {path} is corrupt ({exc!r}); defaults loaded.\n"
+            )
 
 
 __all__ = [

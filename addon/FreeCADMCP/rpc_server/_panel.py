@@ -17,8 +17,6 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import sys
-from typing import Any
 
 try:
     from PySide import QtCore, QtGui, QtWidgets  # PySide6 inside the flatpak
@@ -27,7 +25,7 @@ except Exception:  # pragma: no cover - only hit when run outside FreeCAD
 
 from . import rpc_server
 
-_PANEL_SINGLETON: "MCPControlPanel | None" = None
+_PANEL_SINGLETON: MCPControlPanel | None = None
 
 
 # ----- Status indicator widget ---------------------------------------------------
@@ -53,7 +51,7 @@ class _StatusLED(QtWidgets.QFrame):
         self._detail = QtWidgets.QLabel("localhost:0")
         self._detail.setStyleSheet("color: #6b7280; font-size: 11px;")
 
-        text_col = QtWidgets.QVBoxLayout(text_col) if False else QtWidgets.QVBoxLayout()
+        text_col = QtWidgets.QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
         text_col.addWidget(self._label)
@@ -353,7 +351,7 @@ _BTN_STOP = _BTN_BASE + "QPushButton { background:#dc2626; }"    # red
 # ----- Public helpers ---------------------------------------------------------
 
 
-def get_or_create_panel(mw: QtWidgets.QWidget | None = None) -> "MCPControlPanel":
+def get_or_create_panel(mw: QtWidgets.QWidget | None = None) -> MCPControlPanel:
     """Return the singleton panel, creating it if needed."""
     global _PANEL_SINGLETON
     if _PANEL_SINGLETON is not None:
@@ -363,7 +361,7 @@ def get_or_create_panel(mw: QtWidgets.QWidget | None = None) -> "MCPControlPanel
     return panel
 
 
-def show_panel() -> "MCPControlPanel":
+def show_panel() -> MCPControlPanel:
     """Create the dock (if missing) and make it visible + focused."""
     import FreeCADGui
 

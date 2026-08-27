@@ -106,6 +106,7 @@ class Histogram:
         documentation: str,
         labelnames: tuple[str, ...] = (),
         buckets: tuple[float, ...] = DEFAULT_BUCKETS,
+        max_label_cardinality: int | None = None,
     ) -> None:
         if any(b <= 0 for b in buckets) or sorted(set(buckets)) != list(buckets):
             raise ValueError("buckets must be a strictly increasing sequence of positive numbers")
@@ -113,6 +114,12 @@ class Histogram:
         self.documentation = documentation
         self.labelnames = labelnames
         self.buckets = buckets
+        # Hard cap on the number of distinct label tuples. When the cap
+        # is reached, new label tuples are silently aggregated under a
+        # single "__overflow__" bucket so a runaway label (e.g. tool
+        # name with the wrong dimension) cannot grow the dicts without
+        # bound. ``None`` = unlimited (legacy behaviour).
+        self._max_cardinality = max_label_cardinality
         # bucket -> {labels -> count}
         self._bucket_counts: dict[float, dict[tuple[str, ...], int]] = {
             b: {} for b in self.buckets
@@ -121,6 +128,7 @@ class Histogram:
         self._counts: dict[tuple[str, ...], int] = {}
         # +Inf bucket
         self._inf: dict[tuple[str, ...], int] = {}
+        self._overflow = 0
         self._lock = threading.Lock()
 
     def observe(self, value: float, *label_values: str) -> None:
@@ -130,13 +138,22 @@ class Histogram:
                 f"got {len(label_values)}"
             )
         with self._lock:
-            self._sums[label_values] = self._sums.get(label_values, 0.0) + value
-            self._counts[label_values] = self._counts.get(label_values, 0) + 1
-            self._inf[label_values] = self._inf.get(label_values, 0) + 1
+            labels = label_values
+            if (
+                self._max_cardinality is not None
+                and labels not in self._counts
+                and len(self._counts) >= self._max_cardinality
+            ):
+                # Fold into the overflow bucket.
+                self._overflow += 1
+                return
+            self._sums[labels] = self._sums.get(labels, 0.0) + value
+            self._counts[labels] = self._counts.get(labels, 0) + 1
+            self._inf[labels] = self._inf.get(labels, 0) + 1
             for b in self.buckets:
                 if value <= b:
-                    self._bucket_counts[b][label_values] = (
-                        self._bucket_counts[b].get(label_values, 0) + 1
+                    self._bucket_counts[b][labels] = (
+                        self._bucket_counts[b].get(labels, 0) + 1
                     )
 
     def snapshot(self, *label_values: str) -> dict[str, float | int]:
@@ -147,6 +164,22 @@ class Histogram:
                 **{f"le_{b}": self._bucket_counts[b].get(label_values, 0) for b in self.buckets},
                 "le_inf": self._inf.get(label_values, 0),
             }
+
+    def label_keys(self) -> list[tuple[str, ...]]:
+        """Snapshot of distinct label tuples currently stored.
+
+        Cheap copy taken under the same lock used by ``observe``, so
+        callers (e.g. :func:`format_prometheus`) can iterate without
+        racing with concurrent writes.
+        """
+        with self._lock:
+            return list(self._counts.keys())
+
+    @property
+    def overflow(self) -> int:
+        """Number of observations folded into the ``__overflow__`` bucket."""
+        with self._lock:
+            return self._overflow
 
 
 class Gauge:
@@ -231,7 +264,7 @@ class MetricsRegistry:
             },
             "tool_duration_count": {
                 "|".join(labels): self.tool_duration.snapshot(*labels)["count"]
-                for labels in list(self.tool_duration._counts)  # noqa: SLF001
+                for labels in self.tool_duration.label_keys()
             },
             "validation_failures": {
                 "|".join(labels): value
@@ -277,7 +310,7 @@ def format_prometheus(registry: MetricsRegistry) -> str:
     h = registry.tool_duration
     lines.append(f"# HELP {h.name} {h.documentation}")
     lines.append(f"# TYPE {h.name} histogram")
-    for labels in list(h._counts):  # noqa: SLF001
+    for labels in h.label_keys():
         snap = h.snapshot(*labels)
         cumulative: float = 0.0
         for b in h.buckets:

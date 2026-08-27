@@ -13,6 +13,31 @@ class FreeCADMCPAddonWorkbench(Workbench):
         self.appendToolbar("FreeCAD MCP", commands)
         self.appendMenu("FreeCAD MCP", commands)
 
+        # Register every command via the central helper so we have a
+        # single source of truth and no surprise ``addCommand`` calls
+        # during module import (which would break test runners).
+        try:
+            from rpc_server import rpc_server as _rpc_server
+
+            _rpc_server.register_commands()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[MCP] register_commands failed: {e}\n")
+
+        # Back-compat: keep Start/Stop registered too (no toolbar slots,
+        # but external scripts may still look them up).
+        try:
+            from rpc_server._commands import (
+                StartRPCServerCommand,
+                StopRPCServerCommand,
+            )
+
+            FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
+            FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                f"[MCP] legacy Start/Stop registration failed: {e}\n"
+            )
+
         # Keep the toolbar/menu label in sync with the actual state.
         try:
             from rpc_server._commands import ToggleRPCServerCommand
@@ -44,34 +69,7 @@ class FreeCADMCPAddonWorkbench(Workbench):
 FreeCADGui.addWorkbench(FreeCADMCPAddonWorkbench())
 
 
-# Back-compat: keep the original Start/Stop commands registered so external
-# scripts that look them up still work, but no longer surface them in the
-# toolbar (the Toggle button does both jobs).
-try:
-    from rpc_server._commands import (
-        StartRPCServerCommand,
-        StopRPCServerCommand,
-    )
-
-    FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
-    FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
-except Exception:
-    pass
-
-
-def _auto_start_mcp():
-    try:
-        from rpc_server import rpc_server
-
-        settings = rpc_server.load_settings()
-        if not settings.get("auto_start_rpc", False):
-            return
-
-        msg = rpc_server.start_rpc_server()
-        FreeCAD.Console.PrintMessage(f"[MCP] Auto-start: {msg}\n")
-    except Exception as e:
-        FreeCAD.Console.PrintWarning(f"[MCP] Auto-start failed: {e}\n")
-
-
-if QtCore is not None:
-    QtCore.QTimer.singleShot(0, _auto_start_mcp)
+# Auto-start of the RPC server is now driven by ``rpc_server.py`` itself
+# via :func:`_auto_start_mcp` + ``register_commands`` so there is no
+# duplicate scheduling when this module is reloaded by the FreeCAD
+# plugin manager.

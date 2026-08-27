@@ -3,10 +3,12 @@ import contextlib
 import gzip
 import logging
 import os
+import re
 import xmlrpc.client
 from typing import Any
 
 from .circuit_breaker import CircuitBreaker
+from .tool_policy import is_tool_elevated
 
 logger = logging.getLogger("FreeCADMCPserver")
 
@@ -15,6 +17,30 @@ logger = logging.getLogger("FreeCADMCPserver")
 # results) without touching code. Default = 10s, matching the server's
 # own per-task timeout.
 _DEFAULT_RPC_TIMEOUT = float(os.environ.get("FREECAD_MCP_RPC_TIMEOUT", "10"))
+
+# Pattern matched against exception messages before they're returned to
+# the LLM. Absolute filesystem paths (anchored at start, ``~``, or a
+# drive letter) are replaced with ``<path>`` so the model never sees
+# where the file lives on the host. Keeps enough signal for debugging
+# (file basename, type).
+_PATH_REDACT_RE = re.compile(
+    r"[A-Za-z]:[/\\][^\s'\"\\)]+"          # C:\abs or C:/abs
+    r"|~[/\\][^\s'\"\\)]+"                 # ~/relative
+    r"|(?<![A-Za-z0-9_./])[/\\]{1,2}[^\s'\"\\)]+"  # /abs or \\abs (not preceded by path char)
+)
+
+
+def _sanitize_detail(detail: str) -> str:
+    """Strip absolute paths from error messages before exposing them to an LLM.
+
+    FreeCAD tracebacks and Python's own exceptions regularly embed the
+    absolute path of the document, the user's home, or the OS temp dir.
+    Sending that verbatim to a remote model leaks filesystem layout. We
+    keep the trailing filename and the exception type — that's enough
+    for the model to debug, but the path itself is replaced with a
+    ``<path>`` placeholder.
+    """
+    return _PATH_REDACT_RE.sub("<path>", detail)
 
 
 class _TimeoutTransport(xmlrpc.client.Transport):
@@ -45,15 +71,48 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         )
 
 
-def _build_server_proxy(host: str, port: int, timeout: float) -> xmlrpc.client.ServerProxy:
-    """Construct a ServerProxy that honours *timeout*.
+class _BearerTransport(_TimeoutTransport):
+    """XML-RPC transport that injects ``Authorization: Bearer <token>`` on every outbound request.
+
+    Inherits timeout behaviour from :class:`_TimeoutTransport`. The
+    bearer token is stored on the transport instance and refreshed in
+    place by :meth:`FreeCADConnection.set_bearer_token` so the existing
+    ``ServerProxy`` keeps working without being rebuilt.
+    """
+
+    def __init__(self, timeout: float, token: str | None = None) -> None:
+        super().__init__(timeout)
+        self._token = token
+
+    def set_token(self, token: str | None) -> None:
+        """Update the bearer token used for subsequent requests.
+
+        ``token=None`` disables header injection (used when the client is
+        created with ``set_bearer_token`` called later).
+        """
+        self._token = token
+
+    def send_headers(self, connection, headers):  # type: ignore[override]
+        if self._token:
+            headers.append(("Authorization", f"Bearer {self._token}"))
+        super().send_headers(connection, headers)
+
+
+def _build_server_proxy(
+    host: str, port: int, timeout: float, token: str | None = None
+) -> xmlrpc.client.ServerProxy:
+    """Construct a ServerProxy that honours *timeout* and optional bearer *token*.
 
     Uses the stdlib ``Transport`` (HTTP) by default; falls back to
-    ``SafeTransport`` for HTTPS, both wrapped with our timeout enforcement.
+    ``SafeTransport`` for HTTPS, both wrapped with our timeout
+    enforcement. When *token* is provided, every XML-RPC request
+    carries an ``Authorization: Bearer <token>`` header — required by
+    ``_BearerAuthHandler`` on the FreeCAD side whenever
+    ``FREECAD_MCP_AUTH_TOKEN`` is set on the server.
     """
     url = f"http://{host}:{port}"
     try:
-        transport: xmlrpc.client.Transport = _TimeoutTransport(timeout)
+        transport: xmlrpc.client.Transport = _BearerTransport(timeout, token)
     except Exception:
         # Extremely defensive: if TimeoutTransport fails for some reason we
         # still get a working (but untimed) client rather than crashing the
@@ -61,6 +120,14 @@ def _build_server_proxy(host: str, port: int, timeout: float) -> xmlrpc.client.S
         logger.warning("Falling back to default XML-RPC transport without timeout")
         transport = xmlrpc.client.Transport()
     return xmlrpc.client.ServerProxy(url, allow_none=True, transport=transport)
+
+
+class ElevatedToolAuthError(RuntimeError):
+    """Raised when an elevated tool is invoked without a bearer token.
+
+    Distinct from the standard RPC error envelope so callers can wire
+    it into a single retry-with-auth path if they wish.
+    """
 
 
 class FreeCADConnection:
@@ -71,6 +138,7 @@ class FreeCADConnection:
         # construction paths in ``__init__`` overwrite this with a fresh
         # instance (or the one passed in by the caller).
         instance.breaker = CircuitBreaker()
+        instance._bearer_token: str | None = None
         return instance
 
     def __init__(
@@ -82,11 +150,77 @@ class FreeCADConnection:
     ):
         effective_timeout = _DEFAULT_RPC_TIMEOUT if timeout is None else float(timeout)
         self.timeout = effective_timeout
-        self.server = _build_server_proxy(host, port, effective_timeout)
+        self.server = _build_server_proxy(host, port, effective_timeout, token=None)
         # One breaker per connection, shared by all RPC methods. Operations
         # are sequential from the client's perspective, so a per-call
         # breaker would lose aggregate failure counts.
         self.breaker = circuit_breaker if circuit_breaker is not None else CircuitBreaker()
+
+    # ------------------------------------------------------------------
+    # Bearer-token auth (for ELEVATED tools)
+    # ------------------------------------------------------------------
+
+    def set_bearer_token(self, token: str) -> None:
+        """Configure the bearer token sent on every XML-RPC request.
+
+        Stored both on the instance (``self._bearer_token``) and pushed
+        into the live transport so the *existing* ``ServerProxy`` starts
+        sending the ``Authorization: Bearer <token>`` header on its
+        next call. The FreeCAD RPC server (``_BearerAuthHandler``) reads
+        this header whenever ``FREECAD_MCP_AUTH_TOKEN`` is configured.
+
+        Passing an empty / whitespace string clears the token.
+        """
+        cleaned = (token or "").strip() or None
+        self._bearer_token = cleaned
+        transport = getattr(self.server, "_ServerProxy__transport", None)
+        if isinstance(transport, _BearerTransport):
+            transport.set_token(cleaned)
+        logger.info(
+            "FreeCAD client bearer token %s",
+            "set" if cleaned else "cleared",
+        )
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Headers that *would* be attached to the next RPC.
+
+        Exposed for tests so callers can reason about whether the token
+        is configured without having to dig into the transport.
+        """
+        if self._bearer_token:
+            return {"Authorization": f"Bearer {self._bearer_token}"}
+        return {}
+
+    def _call_elevated(self, name: str, fn):
+        """Run *fn* only if *name* is an elevated tool *and* we have a token.
+
+        ``execute_code`` and ``run_fem_analysis`` are the only elevated
+        tools today (see :data:`tool_policy.ELEVATED_TOOLS`). When
+        ``name`` is not elevated, the call is forwarded unconditionally
+        — this helper is a no-op in that path so it is safe to wrap
+        every RPC method.
+
+        Raises:
+            ElevatedToolAuthError: when *name* is elevated and no bearer
+                token has been configured via :meth:`set_bearer_token`.
+        """
+        if not is_tool_elevated(name):
+            return self.breaker.call(fn)
+        if not self._bearer_token:
+            logger.error(
+                "Elevated tool '%s' rejected: no bearer token configured "
+                "(set FREECAD_MCP_AUTH_TOKEN on the server and call "
+                "set_bearer_token() on the client).",
+                name,
+            )
+            raise ElevatedToolAuthError(
+                f"Tool '{name}' is elevated and requires a bearer token. "
+                f"Set FREECAD_MCP_AUTH_TOKEN on the FreeCAD server and "
+                f"call FreeCADConnection.set_bearer_token(token) before "
+                f"invoking this tool."
+            )
+        logger.debug("Elevated tool '%s' proceeding with bearer token.", name)
+        return self.breaker.call(fn)
 
     def disconnect(self) -> None:
         # Transport.close() clears cached HTTP connections if one was opened.
@@ -96,7 +230,49 @@ class FreeCADConnection:
             close()
 
     def ping(self) -> bool:
-        return self.breaker.call(lambda: self.server.ping())  # type: ignore[return-value]
+        """Cheap liveness probe that swallows XML-RPC faults.
+
+        Returns ``True`` only when the server actually responded with a
+        ``True`` ping; otherwise ``False`` (and the breaker has already
+        counted the failure internally).
+        """
+        try:
+            return bool(self.breaker.call(lambda: self.server.ping()))  # type: ignore[return-value]
+        except Exception:
+            return False
+
+    def _safe_call(self, label: str, fn):
+        """Wrap an RPC call with circuit-breaker + sanitised error envelope.
+
+        Any exception raised by ``fn`` (or by the breaker opening) is
+        captured into a dict ``{"success": False, "reason": ..., "detail": ...}``
+        so individual tools do not need to repeat the boilerplate. The
+        detail string is scrubbed of absolute paths to avoid leaking the
+        user's filesystem layout to the LLM.
+        """
+        try:
+            return self.breaker.call(fn)
+        except xmlrpc.client.Fault as e:
+            logger.warning("%s RPC fault: %s", label, e)
+            return {
+                "success": False,
+                "reason": "rpc_fault",
+                "detail": _sanitize_detail(f"{type(e).__name__}: {e}"),
+            }
+        except (ConnectionError, OSError) as e:
+            logger.warning("%s RPC connection error: %s", label, e)
+            return {
+                "success": False,
+                "reason": "rpc_connection_error",
+                "detail": _sanitize_detail(f"{type(e).__name__}: {e}"),
+            }
+        except Exception as e:
+            logger.warning("%s RPC unexpected error: %s", label, e)
+            return {
+                "success": False,
+                "reason": "rpc_error",
+                "detail": _sanitize_detail(f"{type(e).__name__}: {e}"),
+            }
 
     def cancel_request(self, request_id: str) -> dict[str, Any]:
         """Cooperatively cancel a previously-submitted request by id.
@@ -141,7 +317,10 @@ class FreeCADConnection:
         return self.breaker.call(lambda: self.server.insert_part_from_library(relative_path, request_id))  # type: ignore[return-value]
 
     def execute_code(self, code: str, request_id: str | None = None) -> dict[str, Any]:
-        return self.breaker.call(lambda: self.server.execute_code(code, request_id))  # type: ignore[return-value]
+        return self._call_elevated(
+            "execute_code",
+            lambda: self.server.execute_code(code, request_id),
+        )  # type: ignore[return-value]
 
     def get_active_screenshot(
         self,
@@ -232,7 +411,10 @@ class FreeCADConnection:
         return self.breaker.call(lambda: self.server.list_documents())  # type: ignore[return-value]
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600, request_id: str | None = None) -> dict[str, Any]:
-        return self.breaker.call(lambda: self.server.run_fem_analysis(doc_name, analysis_name, timeout, request_id))  # type: ignore[return-value]
+        return self._call_elevated(
+            "run_fem_analysis",
+            lambda: self.server.run_fem_analysis(doc_name, analysis_name, timeout, request_id),
+        )  # type: ignore[return-value]
 
     def health_check(self) -> dict[str, Any]:
         return self.breaker.call(lambda: self.server.health_check())  # type: ignore[return-value]

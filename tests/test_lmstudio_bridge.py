@@ -5,7 +5,6 @@ to ``127.0.0.1:0`` so we never clash with a developer's other ports.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import socket
 import sys
@@ -103,12 +102,12 @@ def _make_bridge_and_session(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ask_returns_final_answer_immediately(monkeypatch):
+async def test_ask_returns_final_answer_immediately(monkeypatch):
     bridge, _ = _make_bridge_and_session(monkeypatch)
     fake_http = _FakeHttp([{"choices": [{"message": {
         "role": "assistant", "content": "Plain answer."}}]}])
     monkeypatch.setattr(lb.httpx, "post", fake_http)
-    out = asyncio.run(bridge.ask("hi", model="qwen3.6:27b"))
+    out = await bridge.ask("hi", model="qwen3.6:27b")
     assert out == "Plain answer."
     # The payload sent upstream carries our user message + tools.
     assert fake_http.last_payload["messages"][0]["role"] == "user"
@@ -116,7 +115,7 @@ def test_ask_returns_final_answer_immediately(monkeypatch):
     assert fake_http.last_payload["tools"][0]["function"]["name"] == "echo"
 
 
-def test_ask_dispatches_tool_calls_then_continues(monkeypatch):
+async def test_ask_dispatches_tool_calls_then_continues(monkeypatch):
     bridge, sess = _make_bridge_and_session(monkeypatch)
     fake_http = _FakeHttp([
         {"choices": [{"message": {"tool_calls": [
@@ -125,19 +124,19 @@ def test_ask_dispatches_tool_calls_then_continues(monkeypatch):
         {"choices": [{"message": {"content": "done after tool"}}]},
     ])
     monkeypatch.setattr(lb.httpx, "post", fake_http)
-    out = asyncio.run(bridge.ask("do", model="m"))
+    out = await bridge.ask("do", model="m")
     assert out == "done after tool"
     assert sess.calls == [("echo", {"a": 1})]
 
 
-def test_ask_max_iterations_raises(monkeypatch):
+async def test_ask_max_iterations_raises(monkeypatch):
     bridge, _ = _make_bridge_and_session(monkeypatch)
     fake_http = _FakeHttp([
         {"choices": [{"message": {"tool_calls": [
             {"function": {"name": "echo", "arguments": "{}"}}]}}]}] * 5)
     monkeypatch.setattr(lb.httpx, "post", fake_http)
     with pytest.raises(lb.LMStudioBridgeError, match="max_tool_iterations"):
-        asyncio.run(bridge.ask("spin", model="m"))
+        await bridge.ask("spin", model="m")
 
 
 # ---------------------------------------------------------------------------

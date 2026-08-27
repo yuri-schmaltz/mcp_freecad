@@ -182,6 +182,20 @@ class CircuitBreaker:
         self.status.opened_at = 0.0
         self.status.last_error = ""
 
+    def reset(self) -> dict[str, Any]:
+        """Force the breaker back to ``closed`` regardless of state.
+
+        Exposed for operator-driven recovery (admin endpoint, REST
+        handler, operator CLI). Returns the post-reset snapshot so the
+        caller can confirm the action took effect.
+        """
+        previous_state = self.status.state
+        self._close()
+        logger.info(
+            "circuit RESET (was %s); consecutive_failures cleared", previous_state
+        )
+        return self.metrics()
+
     def _maybe_half_open(self) -> bool:
         """Check if the reset window has elapsed; if so, move to half_open.
 

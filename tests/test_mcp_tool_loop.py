@@ -6,7 +6,6 @@ real LLM; fake session + scripted replies are enough.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 import types
@@ -108,11 +107,7 @@ def _pick_content(message):
     return str(message.get("content") or "")
 
 
-def _run(coro):
-    return asyncio.run(coro)
-
-
-def test_run_tool_loop_returns_final_answer_immediately():
+async def test_run_tool_loop_returns_final_answer_immediately():
     """No tool_calls on the first reply → returns the content."""
     sess = _FakeSession([])
     replies = iter([{"message": {"role": "assistant",
@@ -123,17 +118,17 @@ def test_run_tool_loop_returns_final_answer_immediately():
         seen.append(list(loop.messages))
         loop.last_reply = next(replies)
 
-    res = _run(mtl.run_tool_loop(sess, [{"role": "user", "content": "hi"}],
+    res = await mtl.run_tool_loop(sess, [{"role": "user", "content": "hi"}],
                                   pick_message=_pick_message,
                                   pick_tool_calls=_pick_tool_calls,
                                   pick_content=_pick_content,
-                                  call_one_step=_send, max_iterations=3))
+                                  call_one_step=_send, max_iterations=3)
     assert res.content == "done."  # stripped
     assert res.iterations == 1
     assert seen[0][0]["content"] == "hi"
 
 
-def test_run_tool_loop_dispatches_tool_calls_and_continues():
+async def test_run_tool_loop_dispatches_tool_calls_and_continues():
     sess = _FakeSession([types.SimpleNamespace(content=[types.SimpleNamespace(
         text="tool-1-out", data=None)])])
     replies = iter([
@@ -145,11 +140,11 @@ def test_run_tool_loop_dispatches_tool_calls_and_continues():
     async def _send(loop):
         loop.last_reply = next(replies)
 
-    res = _run(mtl.run_tool_loop(sess, [{"role": "user", "content": "go"}],
+    res = await mtl.run_tool_loop(sess, [{"role": "user", "content": "go"}],
                                   pick_message=_pick_message,
                                   pick_tool_calls=_pick_tool_calls,
                                   pick_content=_pick_content,
-                                  call_one_step=_send, max_iterations=5))
+                                  call_one_step=_send, max_iterations=5)
     assert res.content == "answered"
     assert res.iterations == 2
     assert sess.calls == [("do_x", {"a": 1})]
@@ -158,7 +153,7 @@ def test_run_tool_loop_dispatches_tool_calls_and_continues():
     assert "tool" in roles
 
 
-def test_run_tool_loop_parses_string_arguments():
+async def test_run_tool_loop_parses_string_arguments():
     """OpenAI servers send arguments as a JSON string."""
     sess = _FakeSession([types.SimpleNamespace(content=[])])
     replies = iter([
@@ -170,15 +165,15 @@ def test_run_tool_loop_parses_string_arguments():
     async def _send(loop):
         loop.last_reply = next(replies)
 
-    _run(mtl.run_tool_loop(sess, [{"role": "user", "content": "x"}],
-                            pick_message=_pick_message,
-                            pick_tool_calls=_pick_tool_calls,
-                            pick_content=_pick_content,
-                            call_one_step=_send, max_iterations=3))
+    await mtl.run_tool_loop(sess, [{"role": "user", "content": "x"}],
+                             pick_message=_pick_message,
+                             pick_tool_calls=_pick_tool_calls,
+                             pick_content=_pick_content,
+                             call_one_step=_send, max_iterations=3)
     assert sess.calls == [("f", {"x": 7})]
 
 
-def test_run_tool_loop_surfaces_tool_exception_as_tool_error():
+async def test_run_tool_loop_surfaces_tool_exception_as_tool_error():
     """Tool errors must not crash the loop — they go back to the model."""
     sess = _FakeSession([RuntimeError("boom")])
     replies = iter([
@@ -189,11 +184,11 @@ def test_run_tool_loop_surfaces_tool_exception_as_tool_error():
     async def _send(loop):
         loop.last_reply = next(replies)
 
-    res = _run(mtl.run_tool_loop(sess, [{"role": "user", "content": "x"}],
+    res = await mtl.run_tool_loop(sess, [{"role": "user", "content": "x"}],
                                   pick_message=_pick_message,
                                   pick_tool_calls=_pick_tool_calls,
                                   pick_content=_pick_content,
-                                  call_one_step=_send, max_iterations=3))
+                                  call_one_step=_send, max_iterations=3)
     assert res.content == "I see the error"
     # The tool message carries the error string.
     last_tool = next(m for m in res.messages if m.get("role") == "tool")
@@ -201,7 +196,7 @@ def test_run_tool_loop_surfaces_tool_exception_as_tool_error():
     assert "boom" in last_tool["content"]
 
 
-def test_run_tool_loop_raises_when_iterations_exhausted():
+async def test_run_tool_loop_raises_when_iterations_exhausted():
     sess = _FakeSession([types.SimpleNamespace(content=[])] * 10)
 
     async def _always_calls(loop):
@@ -209,10 +204,10 @@ def test_run_tool_loop_raises_when_iterations_exhausted():
             {"name": "spin", "arguments": {}}]}}
 
     with pytest.raises(RuntimeError, match="max_tool_iterations"):
-        _run(mtl.run_tool_loop(sess, [{"role": "user", "content": "x"}],
+        await mtl.run_tool_loop(sess, [{"role": "user", "content": "x"}],
                                 pick_message=_pick_message,
                                 pick_tool_calls=_pick_tool_calls,
                                 pick_content=_pick_content,
                                 call_one_step=_always_calls,
-                                max_iterations=2))
+                                max_iterations=2)
     assert len(sess.calls) == 2

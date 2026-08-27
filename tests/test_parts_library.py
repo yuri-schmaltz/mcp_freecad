@@ -170,6 +170,69 @@ def test_insert_part_from_library_missing_file_raises():
         _fc.getUserAppDataDir = saved_dir
 
 
+# ----------------------------------------------------------------------
+# v1.0.4 gauntlet — guards: import + functions work without FreeCAD
+# ----------------------------------------------------------------------
+
+
+def test_module_imports_without_freecad(monkeypatch):
+    """The module must import cleanly even when FreeCAD is absent."""
+    # Drop any pre-injected stub so we exercise the real import path.
+    for name in ("FreeCAD", "FreeCADGui"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ("FreeCAD", "FreeCADGui"):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    spec2 = importlib.util.spec_from_file_location(
+        "_parts_lib_no_freecad", str(_LIB_PATH)
+    )
+    mod = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    # After guarded import, the names are bound to None.
+    assert mod.FreeCAD is None
+    assert mod.FreeCADGui is None
+
+
+def test_runtime_functions_raise_without_freecad(monkeypatch):
+    """Public functions raise a clear RuntimeError when FreeCAD is missing."""
+    for name in ("FreeCAD", "FreeCADGui"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ("FreeCAD", "FreeCADGui"):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    spec2 = importlib.util.spec_from_file_location(
+        "_parts_lib_no_freecad_runtime", str(_LIB_PATH)
+    )
+    mod = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="FreeCAD is not available"):
+        mod.get_parts_list()
+    with pytest.raises(RuntimeError, match="FreeCAD is not available"):
+        mod.insert_part_from_library("anything.fcstd")
+
+
 if __name__ == "__main__":
     test_relative_resolves_inside()
     test_nested_relative_resolves_inside()
@@ -179,4 +242,6 @@ if __name__ == "__main__":
     test_empty_rejected()
     test_root_separator_rejected()
     test_symlink_escape_rejected()
+    test_module_imports_without_freecad()
+    test_runtime_functions_raise_without_freecad()
     print("All parts_library tests passed")

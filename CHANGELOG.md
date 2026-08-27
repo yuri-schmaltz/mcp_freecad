@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Theme: Wider LLM support.** Allows the MCP server to be driven
 by Ollama (and any OpenAI-API-shaped runtime) without first-class
 MCP support, plus a headless-render fallback for the FreeCAD
-addon. 26 new tests, 4 new dispatch tests, 93.69 % coverage
+addon. 38 new tests, 4 new dispatch tests, 93.69 % coverage
 (up from 86.68 %).
 
 ### Added
@@ -45,6 +45,12 @@ addon. 26 new tests, 4 new dispatch tests, 93.69 % coverage
   Studio in-process ask path, and the HTTP proxy end-to-end
   (live `ThreadingHTTPServer` + POST `/v1/chat/completions` +
   404 + 400 JSON-parse error).
+- **`pytest-asyncio` (≥0.23) added to dev deps** + `asyncio_mode
+  = auto` in `pytest.ini`. The 9 bridge/loop tests that used to
+  wrap every coroutine in `asyncio.run(...)` are now plain
+  `async def test_*` functions, which read closer to the code
+  they exercise and run faster (no per-test event-loop
+  spin-up in the harness wrapper).
 
 ### Fixed
 

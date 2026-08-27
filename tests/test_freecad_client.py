@@ -296,6 +296,7 @@ def test_insert_part_from_library():
 
 def test_execute_code_passes_code_and_id():
     conn = _conn_with_recording_server({"ok": True})
+    conn.set_bearer_token("test-token")
     conn.execute_code("FreeCAD.newDocument('X')", "REQ-4")
     name, args, kwargs = conn.server.calls[0]
     assert name == "execute_code"
@@ -332,6 +333,7 @@ def test_list_documents_returns_list():
 
 def test_run_fem_analysis_passes_timeout():
     conn = _conn_with_recording_server({"ok": True})
+    conn.set_bearer_token("test-token")
     conn.run_fem_analysis("Doc1", "Analysis", timeout=120)
     name, args, kwargs = conn.server.calls[0]
     assert name == "run_fem_analysis"
@@ -350,6 +352,99 @@ def test_undo_passes_steps():
     name, args, kwargs = conn.server.calls[0]
     assert name == "undo"
     assert args == ("Doc1", 3)
+
+
+# ----------------------------------------------------------------------
+# Bearer-token auth + elevated-tool gate (v1.0.4 gauntlet)
+# ----------------------------------------------------------------------
+
+
+def test_set_bearer_token_populates_auth_headers():
+    conn = _conn_with_recording_server(True)
+    conn.set_bearer_token("abc123")
+    assert conn._auth_headers() == {"Authorization": "Bearer abc123"}
+    assert conn._bearer_token == "abc123"
+
+
+def test_set_bearer_token_strips_and_clears():
+    conn = _conn_with_recording_server(True)
+    conn.set_bearer_token("   ")
+    assert conn._bearer_token is None
+    assert conn._auth_headers() == {}
+    conn.set_bearer_token("")
+    assert conn._bearer_token is None
+
+
+def test_set_bearer_token_pushes_into_transport():
+    """Real transport (built by _build_server_proxy) is a _BearerTransport."""
+    import xmlrpc.client
+
+
+    real = xmlrpc.client.ServerProxy("http://localhost:9875")
+    real.__dict__["_ServerProxy__transport"] = fc._BearerTransport(0.5, token=None)
+    conn = fc.FreeCADConnection.__new__(fc.FreeCADConnection)
+    conn.timeout = 0.5
+    conn.breaker = fc.CircuitBreaker()
+    conn.server = real
+    transport = conn.server._ServerProxy__transport
+    assert isinstance(transport, fc._BearerTransport)
+    conn.set_bearer_token("xyz")
+    assert transport._token == "xyz"
+    conn.set_bearer_token("")  # clear
+    assert transport._token is None
+
+
+def test_non_elevated_tool_unaffected_by_token_state():
+    """``list_documents`` and friends must not require a token."""
+    conn = _conn_with_recording_server(["d"])
+    # No token configured — should still work because it's not elevated.
+    assert conn.list_documents() == ["d"]
+
+
+def test_elevated_tool_without_token_raises():
+    conn = _conn_with_recording_server({"ok": True})
+    with pytest.raises(fc.ElevatedToolAuthError, match="execute_code"):
+        conn.execute_code("print(1)")
+    # The server must not have been called at all.
+    assert conn.server.calls == []
+
+
+def test_elevated_tool_with_token_proceeds():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.set_bearer_token("tok")
+    assert conn.execute_code("print(1)") == {"ok": True}
+    assert conn.server.calls[0][0] == "execute_code"
+
+
+def test_elevated_tool_token_whitespace_normalised():
+    conn = _conn_with_recording_server({"ok": True})
+    conn.set_bearer_token("  super-secret  ")
+    assert conn._bearer_token == "super-secret"
+
+
+def test_run_fem_analysis_gate():
+    conn = _conn_with_recording_server({"ok": True})
+    with pytest.raises(fc.ElevatedToolAuthError):
+        conn.run_fem_analysis("d", "a")
+    conn.set_bearer_token("tok")
+    assert conn.run_fem_analysis("d", "a") == {"ok": True}
+
+
+def test_safe_call_returns_envelope_on_fault():
+    """``_safe_call`` translates exceptions into a structured dict."""
+    from xmlrpc.client import Fault
+
+    class Boom:
+        breaker = fc.CircuitBreaker()
+
+        def __call__(self):
+            raise Fault(1, "boom")
+
+    conn = _conn_with_recording_server(None)
+    result = conn._safe_call("test", Boom())
+    assert result["success"] is False
+    assert result["reason"] == "rpc_fault"
+    assert "boom" in result["detail"]
 
 
 if __name__ == "__main__":

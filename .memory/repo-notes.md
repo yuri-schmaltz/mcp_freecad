@@ -13,11 +13,12 @@
     in `pick_content` produces empty strings. Use
     `lambda msg: msg.get("content")` instead.
 
-## Testing async without pytest-asyncio
+## Testing async
 
-- Project does not depend on `pytest-asyncio` (decision from prior
-  audit). Pattern: define `def _run(coro): return asyncio.run(coro)`
-  helper, write tests as `def test_…(): …; res = _run(mtl.run_tool_loop(...))`.
+- Project now uses `pytest-asyncio` (≥0.23) with `asyncio_mode = auto`
+  in `pytest.ini` — write `async def test_…` directly, no decorator
+  needed, no `asyncio.run(...)` wrapping. The earlier `_run` helper
+  pattern is no longer used.
 - For HTTP serve tests use `urllib.request.urlopen` (with
   `urllib.error.HTTPError` for non-2xx) so the global `httpx.post`
   monkeypatch doesn't intercept the test client itself.
@@ -31,6 +32,6 @@
 
 ## Run tool count after gauntlet-2
 
-- 642/642 passed
+- 654/654 passed
 - coverage 93.69% (≥85% required)
 - src/freecad_mcp/: 18 modules, ruff + mypy clean

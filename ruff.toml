@@ -12,6 +12,8 @@ select = ["E", "F", "W", "UP", "B", "SIM", "I"]
 ignore = [
     "E501",  # line too long — we set line-length and accept occasional overruns
     "B008",  # do not perform function calls in default argument (FastAPI Depends pattern)
+    "UP031", # percent-formatting — kept in code that mirrors CPython's
+             # http.server.py so diffs against upstream stay clean.
 ]
 
 [lint.per-file-ignores]

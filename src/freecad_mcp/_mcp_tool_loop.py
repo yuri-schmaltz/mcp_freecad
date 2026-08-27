@@ -9,6 +9,7 @@ execute and feed back as ``role: tool`` messages.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +17,8 @@ from typing import Any
 from mcp import ClientSession
 
 from .circuit_breaker import CircuitBreaker
+
+logger = logging.getLogger("FreeCADMCP.tool_loop")
 
 
 def mcp_tool_to_openai(tool: Any) -> dict[str, Any]:
@@ -95,15 +98,34 @@ async def _dispatch_tool(session: ClientSession, call: dict[str, Any],
                 if "arguments" in call
                 else call.get("function", {}).get("arguments"))
     if isinstance(raw_args, str):
-        try:
-            args = json.loads(raw_args) if raw_args.strip() else {}
-        except json.JSONDecodeError:
+        stripped = raw_args.strip()
+        if not stripped:
             args = {}
+        else:
+            try:
+                args = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                # Fail loudly so the LLM sees the parse error and self-
+                # corrects in the next iteration instead of receiving a
+                # silently empty ``{}`` and looping until max_iterations.
+                logger.warning("tool %s: invalid arguments JSON: %s", name, exc)
+                return {
+                    "role": "tool",
+                    "name": name,
+                    "content": json.dumps(
+                        {
+                            "error": "invalid_arguments_json",
+                            "detail": f"{type(exc).__name__}: {exc}",
+                            "raw_excerpt": stripped[:200],
+                        }
+                    ),
+                }
     else:
         args = raw_args or {}
     try:
         result = await session.call_tool(name, args)
     except Exception as exc:  # noqa: BLE001 — surface to model
+        logger.warning("tool %s raised: %s", name, exc)
         return {"role": "tool", "name": name,
                 "content": json.dumps({"error": f"{type(exc).__name__}: {exc}"})}
     return {"role": "tool", "name": name, "content": _result_to_text(result)}

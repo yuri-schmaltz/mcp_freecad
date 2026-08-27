@@ -167,6 +167,52 @@ def test_all_tool_names_known():
     assert ALL_TOOL_NAMES == frozenset(expected)
 
 
+# ----------------------------------------------------------------------
+# Elevated-tools gating (v1.0.4 gauntlet)
+# ----------------------------------------------------------------------
+
+
+def test_non_elevated_tool_always_passes(monkeypatch):
+    monkeypatch.delenv("FREECAD_MCP_ALLOW_ELEVATED_TOOLS", raising=False)
+    from src.freecad_mcp.tool_policy import validate_elevated_tool_call
+
+    assert validate_elevated_tool_call("create_document", has_token=False) is None
+    assert validate_elevated_tool_call("list_documents", has_token=True) is None
+
+
+def test_elevated_tool_disabled_when_opt_in_missing(monkeypatch):
+    monkeypatch.delenv("FREECAD_MCP_ALLOW_ELEVATED_TOOLS", raising=False)
+    from src.freecad_mcp.tool_policy import validate_elevated_tool_call
+
+    reason = validate_elevated_tool_call("execute_code", has_token=True)
+    assert reason is not None
+    assert "FREECAD_MCP_ALLOW_ELEVATED_TOOLS" in reason
+
+
+def test_elevated_tool_with_opt_in_but_no_token(monkeypatch):
+    monkeypatch.setenv("FREECAD_MCP_ALLOW_ELEVATED_TOOLS", "1")
+    from src.freecad_mcp.tool_policy import validate_elevated_tool_call
+
+    reason = validate_elevated_tool_call("execute_code", has_token=False)
+    assert reason is not None
+    assert "token" in reason.lower()
+
+
+def test_elevated_tool_with_opt_in_and_token_passes(monkeypatch):
+    monkeypatch.setenv("FREECAD_MCP_ALLOW_ELEVATED_TOOLS", "1")
+    from src.freecad_mcp.tool_policy import validate_elevated_tool_call
+
+    assert validate_elevated_tool_call("execute_code", has_token=True) is None
+    assert validate_elevated_tool_call("run_fem_analysis", has_token=True) is None
+
+
+def test_run_fem_analysis_is_elevated(monkeypatch):
+    from src.freecad_mcp.tool_policy import is_tool_elevated
+
+    assert is_tool_elevated("run_fem_analysis") is True
+    assert is_tool_elevated("execute_code") is True
+
+
 if __name__ == "__main__":
     import sys
     # Allow running this test file directly: monkeypatch isn't available

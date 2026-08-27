@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hmac
+import http.client
 import io
 import ipaddress
 import os
@@ -41,6 +42,7 @@ import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import Any
 from xmlrpc.server import SimpleXMLRPCServer
 
@@ -207,9 +209,27 @@ class FilteredXMLRPCServer(SimpleXMLRPCServer, _BearerAuthHandler):
         if _get_auth_token() is not None and FreeCAD is not None and hasattr(FreeCAD, "Console"):
             FreeCAD.Console.PrintMessage("MCP RPC: bearer-token auth enabled\n")
 
+    # Cap concurrent TLS handshakes / accept() calls. Prevents a
+    # Slowloris-style flood from pinning the server thread.
+    _ACCEPT_TIMEOUT_S = 5.0
+    _AUTH_HEADER_TIMEOUT_S = 5.0
+    _MAX_HEADER_LINES = 64
+
     def get_request(self):
         """Accept a connection and optionally wrap it in TLS."""
-        sock, addr = super().get_request()
+        # Apply a per-accept timeout so a stalled client cannot pin the
+        # server thread indefinitely.
+        try:
+            sock, addr = super().get_request()
+        except OSError as e:
+            # Timeout or connection reset — log and let the caller retry.
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintWarning(
+                    f"MCP RPC: accept() error: {type(e).__name__}: {e}\n"
+                )
+            raise
+        with contextlib.suppress(OSError):
+            sock.settimeout(self._ACCEPT_TIMEOUT_S)
         if self._ssl_context is not None:
             try:
                 sock = self._ssl_context.wrap_socket(sock, server_side=True)
@@ -239,46 +259,195 @@ class FilteredXMLRPCServer(SimpleXMLRPCServer, _BearerAuthHandler):
             )
         return False
 
-    def parse_request(self):
-        """Hook in bearer-token auth after the HTTP headers are read."""
-        if _get_auth_token() is not None:
-            try:
-                headers_text = self._read_request_headers_for_auth()
-            except Exception as e:
-                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-                    FreeCAD.Console.PrintWarning(
-                        f"MCP RPC: failed to read auth headers: {type(e).__name__}: {e}\n"
-                    )
-                return False
-            if not self._check_auth(headers_text):
-                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-                    FreeCAD.Console.PrintWarning(
-                        f"MCP RPC: rejected request with bad/missing bearer token from "
-                        f"{self.client_address[0] if self.client_address else '?'}\n"
-                    )
-                return False
-        return super().parse_request()
+    def parse_request(self) -> bool:
+        """Parse an HTTP request, optionally enforcing bearer-token auth.
 
-    def _read_request_headers_for_auth(self) -> str:
-        """Read the request line + headers off the raw socket."""
-        raw = getattr(self, "raw_requestline", b"")
-        first = raw.decode("iso-8859-1", errors="replace") if isinstance(raw, bytes) and raw else ""
+        This override exists to support ``FREECAD_MCP_AUTH_TOKEN``-gated
+        RPC traffic without re-introducing the legacy H3 double-read bug.
+
+        Background (CPython 3.12 stdlib):
+            ``BaseHTTPRequestHandler.handle_one_request`` reads the
+            request line from the canonical request file via
+            ``self.raw_requestline = self.rfile.readline(65537)`` and
+            then calls ``self.parse_request()``. The default
+            ``parse_request`` uses that buffered ``raw_requestline`` and
+            then calls ``http.client.parse_headers(self.rfile, ...)`` to
+            consume the header block from the same ``rfile``. After it
+            returns, ``self.rfile`` is positioned at the start of the
+            request body and ``self.headers`` is populated.
+
+            Reference: CPython 3.12 ``Lib/http/server.py``,
+            ``BaseHTTPRequestHandler.parse_request`` and
+            ``handle_one_request``.
+
+        Auth-disabled path:
+            Delegate straight to ``super().parse_request()`` so any
+            future CPython hardening (stricter request-line validation,
+            HTTP/2 rejection, …) is inherited for free.
+
+        Auth-enabled path:
+            Reimplement the stdlib ``parse_request`` inline so the
+            headers are read **exactly once** off ``self.rfile`` before
+            being validated. We use ``http.client.parse_headers`` (the
+            same helper the stdlib uses) which consumes the bytes from
+            ``self.rfile`` once. We then validate the ``Authorization``
+            header against the configured bearer token. If auth fails
+            we send a 401 response and return ``False``. If auth
+            succeeds we complete the rest of the stdlib parse logic
+            and return ``True`` with ``self.rfile`` positioned at the
+            body — exactly as the upstream contract requires.
+
+            No second ``rfile.readline()`` or ``sock.makefile()`` is
+            ever performed in this branch.
+        """
+        if _get_auth_token() is None:
+            return super().parse_request()
+        return self._parse_request_with_auth()
+
+    def _parse_request_with_auth(self) -> bool:
+        """Auth-enabled replacement for ``BaseHTTPRequestHandler.parse_request``.
+
+        Mirrors CPython 3.12 ``Lib/http/server.py`` step-for-step, with
+        one addition: after the header block is parsed but before any
+        user-visible ``send_error`` call, we validate the bearer
+        token.
+
+        Socket-read count: **1** — performed by ``handle_one_request``'s
+        initial ``self.rfile.readline(65537)``. This method does NOT
+        call ``self.rfile.readline`` or ``sock.makefile``. The only
+        rfile consumption is the single
+        ``http.client.parse_headers(self.rfile, ...)`` call.
+        """
+        # ------------------------------------------------------------------
+        # Phase 1 — request line. ``self.raw_requestline`` was already
+        # buffered by ``handle_one_request``. No socket read here.
+        # ------------------------------------------------------------------
+        self.command = None
+        self.request_version = self.default_request_version
+        self.close_connection = True
+
+        requestline = str(self.raw_requestline, "iso-8859-1")
+        requestline = requestline.rstrip("\r\n")
+        self.requestline = requestline
+        words = requestline.split()
+        if len(words) == 0:
+            return False
+
+        if len(words) >= 3:
+            version = words[-1]
+            try:
+                if not version.startswith("HTTP/"):
+                    raise ValueError
+                base_version_number = version.split("/", 1)[1]
+                version_number = base_version_number.split(".")
+                if len(version_number) != 2:
+                    raise ValueError
+                if any(not component.isdigit() for component in version_number):
+                    raise ValueError("non digit in http version")
+                if any(len(component) > 10 for component in version_number):
+                    raise ValueError("unreasonable length http version")
+                version_number = int(version_number[0]), int(version_number[1])
+            except (ValueError, IndexError):
+                self.send_error(
+                    HTTPStatus.BAD_REQUEST,
+                    "Bad request version (%r)" % version,  # noqa: UP031 (stdlib fidelity)
+                )
+                return False
+            if version_number >= (1, 1) and self.protocol_version >= "HTTP/1.1":
+                self.close_connection = False
+            if version_number >= (2, 0):
+                self.send_error(
+                    HTTPStatus.HTTP_VERSION_NOT_SUPPORTED,
+                    "Invalid HTTP version (%s)" % base_version_number,  # noqa: UP031 (stdlib fidelity)
+                )
+                return False
+            self.request_version = version
+
+        if not 2 <= len(words) <= 3:
+            self.send_error(
+                HTTPStatus.BAD_REQUEST,
+                "Bad request syntax (%r)" % requestline,  # noqa: UP031 (stdlib fidelity)
+            )
+            return False
+        command, path = words[:2]
+        if len(words) == 2:
+            self.close_connection = True
+            if command != "GET":
+                self.send_error(
+                    HTTPStatus.BAD_REQUEST,
+                    "Bad HTTP/0.9 request type (%r)" % command,  # noqa: UP031 (stdlib fidelity)
+                )
+                return False
+        self.command, self.path = command, path
+
+        # gh-87389: protect against open-redirect attacks via "//path".
+        if self.path.startswith("//"):
+            self.path = "/" + self.path.lstrip("/")
+
+        # ------------------------------------------------------------------
+        # Phase 2 — headers. This is the ONLY socket read for the auth
+        # branch: ``http.client.parse_headers`` consumes the header
+        # block off ``self.rfile`` once.
+        # ------------------------------------------------------------------
         try:
-            sock = self.request
-            if hasattr(sock, "makefile"):
-                return first
-            sock.settimeout(2.0)
-            buf = [first] if first else []
-            while True:
-                line = sock.readline()
-                if not line or line in (b"\r\n", b"\n", b""):
-                    break
-                buf.append(line.decode("iso-8859-1", errors="replace"))
-                if len(buf) > 64:
-                    break
-            return "\n".join(buf)
-        except Exception:
-            return first
+            self.headers = http.client.parse_headers(
+                self.rfile, _class=self.MessageClass,
+            )
+        except http.client.LineTooLong as err:
+            self.send_error(
+                HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE,
+                "Line too long",
+                str(err),
+            )
+            return False
+        except http.client.HTTPException as err:
+            self.send_error(
+                HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE,
+                "Too many headers",
+                str(err),
+            )
+            return False
+
+        # ------------------------------------------------------------------
+        # Phase 2.5 — bearer-token gate. Runs AFTER ``parse_headers``
+        # so ``self.headers`` is fully populated, but BEFORE we touch
+        # Connection / Expect so a failed auth returns False cheaply.
+        # We never re-read the socket.
+        # ------------------------------------------------------------------
+        auth_value = self.headers.get("Authorization")
+        headers_text = f"Authorization: {auth_value}" if auth_value else ""
+        if not self._check_auth(headers_text):
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintWarning(
+                    f"MCP RPC: rejected request with bad/missing bearer "
+                    f"token from {self.client_address[0] if self.client_address else '?'}\n"
+                )
+            self.send_error(
+                HTTPStatus.UNAUTHORIZED,
+                "Unauthorized",
+                "Missing or invalid bearer token.",
+            )
+            return False
+
+        # ------------------------------------------------------------------
+        # Phase 3 — Connection / Expect directives (identical to stdlib).
+        # ------------------------------------------------------------------
+        conntype = self.headers.get("Connection", "")
+        if conntype.lower() == "close":
+            self.close_connection = True
+        elif (
+            conntype.lower() == "keep-alive"
+            and self.protocol_version >= "HTTP/1.1"
+        ):
+            self.close_connection = False
+        expect = self.headers.get("Expect", "")
+        expect_ok = (
+            expect.lower() != "100-continue"
+            or self.protocol_version < "HTTP/1.1"
+            or self.request_version < "HTTP/1.1"
+            or self.handle_expect_100()
+        )
+        return expect_ok
 
 
 # --- Object helper + per-property setter ----------------------------------
@@ -705,9 +874,20 @@ class FreeCADRPC:
     def execute_code(self, code: str, request_id: str | None = None, timeout: float | None = None) -> dict[str, Any]:
         def task():
             buf = io.StringIO()
+            # Use a per-call globals dict so user scripts cannot leak
+            # names into the rpc_server module namespace (where they
+            # would persist between RPC calls and possibly collide with
+            # unrelated sessions). Builtins stay reachable so plain
+            # ``print()`` / ``range()`` work as expected.
+            exec_globals: dict[str, Any] = {
+                "__builtins__": __builtins__,
+                "__name__": "__mcp_execute_code__",
+                "FreeCAD": FreeCAD,
+                "FreeCADGui": FreeCADGui,
+            }
             try:
                 with contextlib.redirect_stdout(buf):
-                    exec(code, globals())
+                    exec(code, exec_globals)
                 if FreeCAD is not None and hasattr(FreeCAD, "Console"):
                     FreeCAD.Console.PrintMessage("Python code executed successfully.\n")
                 return {
@@ -1185,15 +1365,29 @@ def start_rpc_server(port=9875):
                     )
                 return format_refusal_message(missing)
 
-        rpc_server_instance = FilteredXMLRPCServer(
-            (host, port),
-            allowed_ips_str=allowed_ips,
-            tls_cert=tls_cert,
-            tls_key=tls_key,
-            allow_none=True,
-            logRequests=False,
-        )
-        rpc_server_instance.register_instance(FreeCADRPC())
+        # Build the server + handler under a try/except so a failure
+        # between bind() and Thread.start() cannot leave the module in
+        # a zombie state (rpc_server_instance pointing at a non-running
+        # server that the next caller would treat as "already running").
+        try:
+            server = FilteredXMLRPCServer(
+                (host, port),
+                allowed_ips_str=allowed_ips,
+                tls_cert=tls_cert,
+                tls_key=tls_key,
+                allow_none=True,
+                logRequests=False,
+            )
+            server.register_instance(FreeCADRPC())
+        except Exception as exc:
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintError(
+                    f"MCP RPC: failed to construct server on {host}:{port}: "
+                    f"{type(exc).__name__}: {exc}\n"
+                )
+            return f"MCP RPC: failed to construct server: {exc}"
+
+        rpc_server_instance = server
 
         def server_loop():
             if FreeCAD is not None and hasattr(FreeCAD, "Console"):
@@ -1202,8 +1396,21 @@ def start_rpc_server(port=9875):
                     FreeCAD.Console.PrintMessage(f"Remote connections enabled. Allowed IPs: {allowed_ips}\n")
             rpc_server_instance.serve_forever()
 
-        rpc_server_thread = threading.Thread(target=server_loop, daemon=True)
-        rpc_server_thread.start()
+        try:
+            rpc_server_thread = threading.Thread(target=server_loop, daemon=True)
+            rpc_server_thread.start()
+        except Exception as exc:
+            # Thread spawn failed — release the half-built server so the
+            # user can retry without "already running" blocking them.
+            with contextlib.suppress(Exception):
+                server.server_close()
+            rpc_server_instance = None
+            rpc_server_thread = None
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintError(
+                    f"MCP RPC: failed to spawn server thread: {type(exc).__name__}: {exc}\n"
+                )
+            return f"MCP RPC: failed to spawn server thread: {exc}"
 
         QtCore.QTimer.singleShot(500, process_gui_tasks)
 
@@ -1295,7 +1502,9 @@ def toggle_rpc_server(port: int = 9875) -> str:
 
 # Re-import here to break the cycle: _commands references this module
 # for ``start_rpc_server`` / ``stop_rpc_server``, but the toolbar
-# ``Toggle_RPC_Server`` command is registered below.
+# ``Toggle_RPC_Server`` command is registered by ``InitGui.py`` via
+# :func:`register_commands` (so test runners that import this module
+# without FreeCADGui do not blow up at import time).
 from ._commands import (  # noqa: E402  (intentional late import)
     ConfigureAllowedIPsCommand,
     ToggleAutoStartCommand,
@@ -1304,21 +1513,69 @@ from ._commands import (  # noqa: E402  (intentional late import)
     _sync_toggle_states,
 )
 
-FreeCADGui.addCommand("Toggle_RPC_Server", ToggleRPCServerCommand())
-FreeCADGui.addCommand("Toggle_Auto_Start", ToggleAutoStartCommand())
-FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
-FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
+
+def register_commands() -> None:
+    """Register every FreeCAD command this addon defines.
+
+    Called by ``InitGui.py`` after the workbench is Initialized, so the
+    FreeCADGui namespace is guaranteed to be live. Safe to call more
+    than once; ``addCommand`` overwrites by name in FreeCAD.
+    """
+    if FreeCADGui is None:
+        return
+    try:
+        FreeCADGui.addCommand("Toggle_RPC_Server", ToggleRPCServerCommand())
+        FreeCADGui.addCommand("Toggle_Auto_Start", ToggleAutoStartCommand())
+        FreeCADGui.addCommand(
+            "Toggle_Remote_Connections", ToggleRemoteConnectionsCommand()
+        )
+        FreeCADGui.addCommand(
+            "Configure_Allowed_IPs", ConfigureAllowedIPsCommand()
+        )
+    except Exception as exc:  # pragma: no cover - depends on FreeCAD GUI
+        if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+            FreeCAD.Console.PrintWarning(
+                f"MCP RPC: register_commands() raised {type(exc).__name__}: {exc}\n"
+            )
 
 
 def _auto_start_mcp():
+    """Bring up the RPC server at boot when ``auto_start_rpc`` is set.
+
+    Bounded retry with exponential backoff (1s, 2s, 4s, max 5 attempts)
+    so transient races with the user clicking the toolbar don't leave
+    the server silently dead until next FreeCAD restart.
+    """
     try:
         settings = load_settings()
         if not settings.get("auto_start_rpc", False):
             return
 
-        msg = start_rpc_server()
-        if FreeCAD is not None and hasattr(FreeCAD, "Console"):
-            FreeCAD.Console.PrintMessage(f"[MCP] Auto-start: {msg}\n")
+        for attempt in range(1, 6):
+            try:
+                msg = start_rpc_server()
+            except Exception as e:
+                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                    FreeCAD.Console.PrintWarning(
+                        f"[MCP] Auto-start attempt {attempt} failed: "
+                        f"{type(e).__name__}: {e}\n"
+                    )
+                if attempt < 5 and QtCore is not None:
+                    QtCore.QTimer.singleShot(2 ** (attempt - 1) * 1000, _auto_start_mcp)
+                return
+
+            if "started" in msg.lower() or "already running" in msg.lower():
+                if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                    FreeCAD.Console.PrintMessage(f"[MCP] Auto-start: {msg}\n")
+                return
+            # Server refused to start (TLS/auth missing, port busy, …)
+            if FreeCAD is not None and hasattr(FreeCAD, "Console"):
+                FreeCAD.Console.PrintWarning(
+                    f"[MCP] Auto-start attempt {attempt} refused: {msg}\n"
+                )
+            if attempt < 5 and QtCore is not None:
+                QtCore.QTimer.singleShot(2 ** (attempt - 1) * 1000, _auto_start_mcp)
+            return
     except Exception as e:
         if FreeCAD is not None and hasattr(FreeCAD, "Console"):
             FreeCAD.Console.PrintWarning(f"[MCP] Auto-start failed: {e}\n")

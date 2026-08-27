@@ -14,10 +14,29 @@
 > screenshots, and manage the parts library — all through typed,
 > validated tool calls.
 
-**Status:** v1.1.0 — feature drop. **24 MCP tools**, **4 MCP resources**,
-streaming output, performance profiler, session replay, document diff,
-reusable workflows, dark/light theme, prompt template gallery, standalone
-web UI. 776 tests passing, ruff & mypy clean.
+**Status:** v1.1.2 — competitive-analysis feature drop. **53 MCP tools**,
+**4 MCP resources**, streaming output, performance profiler, session
+replay, document diff, reusable workflows, dark/light theme, prompt
+template gallery, standalone web UI, **inspection & measurement suite**,
+**multi-instance management**, **async execute + job management**,
+**live API introspection**, **CAM/Path toolpath** (the last 5 came
+from a competitive analysis of 10 other FreeCAD MCP servers). 843+
+tests passing, ruff clean.
+
+**What's new in v1.1.2:** 25 new tools across 5 new feature suites:
+
+- **Inspection & Measurement** — `list_faces`, `measure`, `measure_distance`,
+  `geometric_verification`, `analyze_shape`, `spatial_query`,
+  `sketch_diagnostics`, `recompute_diff`.
+- **Multi-instance management** — `list_freecad_instances`,
+  `spawn_freecad_instance`, `select_freecad_instance`,
+  `stop_freecad_instance`, `instance_status`.
+- **Async execute + job management** — `execute_code_async`, `poll_job`,
+  `list_jobs`, `cancel_job`.
+- **Live API introspection** — `api_introspect`, `api_search`.
+- **CAM/Path toolpath** — `cam_create_tool`, `cam_create_tool_controller`,
+  `cam_create_job`, `cam_add_operation`, `cam_post_process`,
+  `cam_simulate_toolpath`.
 **Origin:** originated as a fork of [neka-nat/freecad-mcp](https://github.com/neka-nat/freecad-mcp);
 now an independent project under active development.
 
@@ -265,7 +284,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 
 ## Tools
 
-The server exposes **24 typed MCP tools**. The first 18 are the original
+The server exposes **53 typed MCP tools**. The first 18 are the original
 design / query / screenshot primitives; the remaining 6 were added in
 **v1.1.0** to give operators production-grade observability and
 reproducibility.

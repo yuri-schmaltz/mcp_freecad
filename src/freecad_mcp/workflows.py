@@ -410,7 +410,7 @@ class WorkflowRegistry:
     def run_variants(
         self,
         name: str,
-        connection: "FreeCADConnection",
+        connection: FreeCADConnection,
         params: dict[str, builtins.list[Any]],
         initial_args: dict[str, Any] | None = None,
         *,

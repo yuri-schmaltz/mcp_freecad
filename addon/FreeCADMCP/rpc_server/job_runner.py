@@ -28,16 +28,18 @@ MCP client can do other work while waiting.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 JOB_DIRNAME = "freecad-mcp"
 JOB_LEAF = "jobs"
@@ -47,10 +49,8 @@ def job_dir() -> Path:
     """Return the directory where job JSON files live."""
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     p = Path(base) / JOB_DIRNAME / JOB_LEAF
-    try:
+    with contextlib.suppress(Exception):
         p.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
     return p
 
 
@@ -249,10 +249,10 @@ class JobRunner:
                 self._persist(job)
 
     def _persist(self, job: Job) -> None:
-        try:
-            _job_path(job.job_id).write_text(json.dumps(job.to_dict(), indent=2, default=str))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            _job_path(job.job_id).write_text(
+                json.dumps(job.to_dict(), indent=2, default=str)
+            )
 
 
 def _truncate(value: Any, *, max_chars: int = 20000) -> Any:
@@ -271,7 +271,7 @@ def _default_runner(code: str, globals_: dict[str, Any]) -> Any:
     """Run ``code`` via ``exec`` and return the value of ``result`` if set."""
     ns = dict(globals_)
     exec(code, ns)
-    return ns.get("result", ns.get("_", None))
+    return ns.get("result", ns.get("_"))
 
 
 # ---------------------------------------------------------------------------

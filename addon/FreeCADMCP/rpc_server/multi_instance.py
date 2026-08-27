@@ -42,13 +42,14 @@ directly, so it is testable in isolation.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -68,12 +69,10 @@ def discovery_dir() -> Path:
     """
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     p = Path(base) / DISCOVERY_DIRNAME / DISCOVERY_LEAF
-    try:
+    # Discovery is best-effort: if we cannot create the directory,
+    # callers will get an OSError on the actual write.
+    with contextlib.suppress(Exception):
         p.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        # Discovery is best-effort: if we cannot create the directory,
-        # callers will get an OSError on the actual write.
-        pass
     return p
 
 

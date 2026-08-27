@@ -83,10 +83,18 @@ from ._settings import (
     load_settings,
     save_settings,  # noqa: F401  (re-exported for back-compat; external callers do rpc_mod.save_settings)
 )
-from .parts_library import get_parts_list, insert_part_from_library
-from .mesh_to_solid import mesh_import, mesh_simplify, mesh_to_solid
-from .step_metadata import step_extract_metadata
+from .api_introspect import api_introspect as _api_introspect
+from .api_introspect import api_search as _api_search
+from .api_introspect import default_modules as _default_modules
 from .bom import bom_export
+from .cam_ops import (
+    cam_add_operation,
+    cam_create_job,
+    cam_create_tool,
+    cam_create_tool_controller,
+    cam_post_process,
+    cam_simulate_toolpath,
+)
 from .fem_post_process import fem_post_process
 from .inspection import (
     analyze_shape,
@@ -98,28 +106,22 @@ from .inspection import (
     sketch_diagnostics,
     spatial_query,
 )
+from .job_runner import get_runner as _get_job_runner
+from .mesh_to_solid import mesh_import, mesh_simplify, mesh_to_solid
 from .multi_instance import (
     clear_active,
-    discovery_dir,
     get_active,
-    get_instance,
-    list_instances as _list_instances,
     register_instance,
     select_instance,
     set_active,
     unregister_instance,
 )
-from .api_introspect import api_introspect as _api_introspect, api_search as _api_search, default_modules as _default_modules
-from .job_runner import get_runner as _get_job_runner, JobRunner
-from .cam_ops import (
-    cam_add_operation,
-    cam_create_job,
-    cam_create_tool,
-    cam_create_tool_controller,
-    cam_post_process,
-    cam_simulate_toolpath,
+from .multi_instance import (
+    list_instances as _list_instances,
 )
+from .parts_library import get_parts_list, insert_part_from_library
 from .serialize import serialize_object
+from .step_metadata import step_extract_metadata
 
 # Backward-compat alias (legacy name in v0.3.x and earlier).
 _transcode_screenshot = transcode_to_format

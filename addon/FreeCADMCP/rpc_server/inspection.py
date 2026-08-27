@@ -288,15 +288,12 @@ def geometric_verification(
     try:
         matrix_of_inertia = shape.MatrixOfInertia
         a = matrix_of_inertia.A
-        b = matrix_of_inertia.B
-        c = matrix_of_inertia.C
         # Determinant of the 3x3 inertia matrix.
         det = (
             a[0] * (a[4] * a[8] - a[5] * a[7])
             - a[1] * (a[3] * a[8] - a[5] * a[6])
             + a[2] * (a[3] * a[7] - a[4] * a[6])
         )
-        det_abs = abs(det)
         # Normalise: divide by a non-zero element to get an
         # approximate handedness sign.
         ref = max(abs(a[0]), 1e-12)

@@ -33,7 +33,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 _STEP_CARD_RE = re.compile(r"FILE_(DESCRIPTION|SCHEMA)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)", re.IGNORECASE | re.DOTALL)
 _STEP_NAME_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*\((.*)\)\s*;\s*$", re.IGNORECASE | re.DOTALL)
 _STEP_HEADER_RE = re.compile(r"FILE_DESCRIPTION\(\s*\(\s*'([^']*)'\s*\)\s*,\s*'([^']*)'\s*\)\s*;", re.IGNORECASE | re.DOTALL)

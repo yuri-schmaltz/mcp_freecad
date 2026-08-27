@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-08-27
+
+**Theme: 5 new feature suites from competitive analysis.** 25 new
+MCP tools, 5 new addon modules. Brings the project to **53 total
+MCP tools** and **843 tests passing**.
+
+### Added — Inspection & Measurement suite (7 tools)
+
+Per competitive analysis, no other FreeCAD MCP server combines
+FEM with a full inspection/measurement API. New tools:
+
+- **`list_faces(doc, obj, type_filter?, limit?)`** — per-face type
+  / normal / centroid / area. `type_filter` is a case-insensitive
+  substring ("Cylinder", "Plane", "Sphere", ...).
+- **`measure(doc, obj, properties?)`** — volume, area, bbox, COM,
+  length, edge/face/vertex count.
+- **`measure_distance(doc, obj_a, obj_b)`** — `BRepExtrema` with
+  bbox fallback.
+- **`geometric_verification(doc, obj, handedness_tol?)`** —
+  emptiness, OCCT validity, inertia-matrix handedness, normal
+  consistency.
+- **`analyze_shape(doc, obj)`** — counts of each surface type
+  (Plane/Cylinder/Cone/Sphere/Torus/B-Spline).
+- **`spatial_query(doc, obj_a, obj_b, mode?, clearance_tol?)`** —
+  `interference` / `clearance` / `containment` modes.
+- **`sketch_diagnostics(doc, sketch)`** — DOF, conflicts,
+  redundancies, fully_constrained flag.
+- **`recompute_diff(doc, obj, expected_volume?)`** — before/after
+  metrics with optional volume delta.
+
+### Added — Multi-instance management (5 tools)
+
+Discovery at `~/.cache/freecad-mcp/instances/<uuid>.json`:
+
+- **`list_freecad_instances(max_age_seconds?)`** — live instances
+  with UUID, label, PID, host, port, started_at, latency.
+- **`spawn_freecad_instance(label?, host?, port?, ...)`** —
+  register a new instance and mark active.
+- **`select_freecad_instance(uuid)`** — switch active target with
+  TCP probe + latency measurement.
+- **`stop_freecad_instance(uuid)`** — unregister from discovery.
+- **`instance_status(uuid?)`** — health + latency.
+
+Each FreeCAD session auto-registers on `start_rpc_server()` so the
+MCP server can find it.
+
+### Added — Async execute + job management (5 tools)
+
+Long-running ops no longer block the MCP client:
+
+- **`execute_code_async(code, label?)`** — submit to background
+  worker, returns `job_id` immediately.
+- **`poll_job(job_id)`** — status / result / error / traceback.
+- **`list_jobs(include_terminal?)`** — all known jobs.
+- **`cancel_job(job_id)`** — cooperative cancellation.
+- Job state persisted to `~/.cache/freecad-mcp/jobs/<id>.json`
+  so jobs survive MCP-server restarts.
+
+### Added — Live API introspection (2 tools)
+
+Reduces LLM errors by validating callables before invocation:
+
+- **`api_introspect(path)`** — `inspect.Signature` + docstring of
+  any `Part.makeBox`, `FreeCAD.Vector`, etc.
+- **`api_search(query, modules_filter?, limit?)`** — fuzzy/regex
+  search across `FreeCAD`, `FreeCADGui`, `Part`, `Mesh`, `Path`,
+  `Fem`, `Arch`, `Spreadsheet`, `Draft`, `TechDraw`, `Sketcher`,
+  `math`, `os`.
+
+### Added — CAM / Path toolpath (6 tools)
+
+Closes the design→manufacturing loop. Uses the `Path` workbench
+when available; otherwise returns `{"success": False, "reason":
+"Path workbench not available"}`:
+
+- **`cam_create_tool(doc, name, type, diameter, length, material)`**
+  — `EndMill`, `BallEndMill`, `Drill`, `CounterSink`, etc.
+- **`cam_create_tool_controller(doc, name, tool, spindle, feed,
+  feed_v)`** — binds a tool to spindle/feed rates.
+- **`cam_create_job(doc, name, base_shape?, tool_controller?,
+  stock_x/y/z?)`** — `Path::Job` with stock extents.
+- **`cam_add_operation(doc, job, op_type, name, ...)`** —
+  `profile`, `pocket`, `adaptive`, `drilling`, `face`.
+- **`cam_post_process(doc, job, post_processor?, output_path?)`**
+  — emits G-code via `linuxcnc` / `grbl` / `marlin` / `smoothie`
+  / `haas` / `mach3_mach4` / `toshiba`.
+- **`cam_simulate_toolpath(doc, job, max_segments?)`** —
+  downsampled backplot ready for client-side rendering.
+
+### Added — server-side modules
+
+- **`addon/FreeCADMCP/rpc_server/inspection.py`** — list_faces,
+  measure, geometric_verification, analyze_shape, spatial_query,
+  recompute_diff, sketch_diagnostics.
+- **`addon/FreeCADMCP/rpc_server/multi_instance.py`** —
+  register_instance, list_instances, select_instance, set_active,
+  discovery directory at `~/.cache/freecad-mcp/instances/`.
+- **`addon/FreeCADMCP/rpc_server/job_runner.py`** —
+  `JobRunner` (single-worker `ThreadPoolExecutor`), JSON-backed
+  job persistence, cooperative cancel.
+- **`addon/FreeCADMCP/rpc_server/api_introspect.py`** —
+  `inspect.signature` + docstring extraction with regex/substring
+  search.
+- **`addon/FreeCADMCP/rpc_server/cam_ops.py`** — Path workbench
+  wrappers (tool, controller, job, ops, post-process, simulate).
+
+### Added — tests
+
+66 new unit tests across:
+- `tests/test_multi_instance.py` — discovery, register, prune,
+  probe, active UUID.
+- `tests/test_api_introspect.py` — signature, class metadata,
+  substring/regex search, default module set.
+- `tests/test_job_runner.py` — submit / poll / cancel / error,
+  persistence, truncation, custom runner, lost-job recovery.
+- `tests/test_inspection.py` — face listing, measure,
+  geometric_verification (mirrored & right-handed), analyze_shape,
+  spatial_query (interference/clearance/containment), recompute_diff,
+  sketch_diagnostics (DOF/conflicts/redundancies).
+- `tests/test_cam_ops.py` — tool creation, op validation,
+  simulation backplot, missing-doc/missing-job error paths.
+
+### Changed
+
+- `PER_OPERATION_TIMEOUTS` extended with 25 new entries (5-600s).
+- `ALL_TOOL_NAMES` extended to 53 tools.
+- `start_rpc_server()` auto-registers the instance in the discovery
+  cache so external tools can find it.
+- `conftest.py`, `test_rpc_server_status.py`,
+  `test_rpc_server_object_gui.py` synthetic loaders updated to
+  include the 5 new submodules.
+
 ## [1.1.0] — 2026-08-27
 
 **Theme: Observability & reproducibility.** Six new MCP tools, four

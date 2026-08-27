@@ -40,9 +40,9 @@ class _FakeDocument:
     def __init__(self, name: str = "Doc") -> None:
         self.Name = name
         self.Label = name
-        self.objects: dict[str, "_FakeFeature"] = {}
+        self.objects: dict[str, _FakeFeature] = {}
 
-    def addObject(self, type_id: str, label: str) -> "_FakeFeature":
+    def addObject(self, type_id: str, label: str) -> _FakeFeature:
         feature = _FakeFeature(type_id=type_id, name=label)
         self.objects[label] = feature
         return feature

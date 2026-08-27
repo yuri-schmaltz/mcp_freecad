@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -27,6 +25,7 @@ def mi_mod(monkeypatch, tmp_path):
         Path(__file__).resolve().parent.parent / "addon/FreeCADMCP/rpc_server/multi_instance.py",
     )
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["_multi_instance_for_test"] = mod
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
@@ -90,8 +89,9 @@ def test_set_get_clear_active(mi_mod) -> None:
 
 def test_select_instance_not_found(mi_mod) -> None:
     res = mi_mod.select_instance("does-not-exist")
-    assert res["success"] is False or res.get("ok") is False
+    assert res.get("ok") is False
     assert res.get("uuid") == "does-not-exist"
+    assert res.get("reason") == "not found"
 
 
 def test_select_instance_probe(monkeypatch, mi_mod) -> None:

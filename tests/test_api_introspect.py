@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib.util
-import inspect
 import math
 import sys
 from pathlib import Path
@@ -18,6 +17,7 @@ def ai_mod():
         "_api_introspect_for_test", _RPC_DIR / "api_introspect.py"
     )
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["_api_introspect_for_test"] = mod
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
@@ -87,6 +87,7 @@ def test_default_modules_contains_math() -> None:
         _RPC_DIR / "api_introspect.py",
     )
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["_api_introspect_for_default_test"] = mod
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     modules = mod.default_modules()
     assert "math" in modules

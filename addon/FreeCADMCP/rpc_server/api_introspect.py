@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import inspect
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -211,10 +211,10 @@ def api_search(
         if mod is None:
             continue
         for name in dir(mod):
-            if name.startswith("__") and name.endswith("__"):
+            is_dunder = name.startswith("__") and name.endswith("__")
+            if is_dunder and not query.startswith("__"):
                 # skip dunders unless query explicitly asks for them
-                if not query.startswith("__"):
-                    continue
+                continue
             try:
                 obj = getattr(mod, name)
             except Exception:

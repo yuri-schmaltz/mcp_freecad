@@ -21,15 +21,16 @@ False, "reason": "Path workbench not available"}`` dict.
 """
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 try:
     import FreeCAD
     import Path
     import PathScripts
+    import PathScripts.tools as _path_tools  # noqa: F401
     import PathTool
     import PathToolController  # type: ignore[import-not-found]
-    import PathScripts.tools as _path_tools  # noqa: F401
 except Exception:  # pragma: no cover
     FreeCAD = None  # type: ignore[assignment]
     Path = None  # type: ignore[assignment]
@@ -85,11 +86,9 @@ def cam_create_tool(
         tool.ToolType = tool_type
         tool.Diameter = float(diameter)
         tool.Length = float(length)
-        try:
+        # Older FreeCAD may not have Material on Path::Tool.
+        with contextlib.suppress(Exception):
             tool.Material = material
-        except Exception:
-            # Older FreeCAD may not have Material on Path::Tool.
-            pass
         doc.recompute()
         return {
             "success": True,
@@ -303,10 +302,8 @@ def cam_add_operation(
             proxy = ObjectAdaptive(op, base_obj)
             op.Proxy = proxy
             op.OpType = "Adaptive"
-            try:
+            with contextlib.suppress(Exception):
                 op.StepDown = float(step_down)
-            except Exception:
-                pass
         else:
             return _err(f"op_type {op_type!r} not implemented")
     except Exception as e:

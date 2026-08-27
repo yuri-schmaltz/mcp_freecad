@@ -34,7 +34,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 _FRD_BLOCK_RE = re.compile(r"^\s*(-?\d+)\s+(PHEAD|CEND|BLIST|\d+CL|STRESS|DISPR|DISPL|DISP|TEMP|COORD|NODE|ELEM)\s*$")
 _FRD_STEP_RE = re.compile(r"^\s*1PSTEP\s+(\d+)")
 _FRD_USER_INC_RE = re.compile(r"^\s*1PUSER\s+(\S+)")

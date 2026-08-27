@@ -12,14 +12,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import pytest
 
 from freecad_mcp.operations.core import (
     mesh_import_operation,
     mesh_simplify_operation,
     mesh_to_solid_operation,
 )
-from freecad_mcp.responses import ToolResponse
 
 
 class _FakeConnection:

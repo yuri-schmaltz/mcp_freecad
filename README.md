@@ -279,6 +279,39 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_active_view`: Inspect the active view (type, size, saveImage support).
 * `health_check`: Liveness probe for monitoring (uptime, queue sizes, settings path).
 
+## Ollama & other OpenAI-API-shaped runtimes
+
+If your LLM host **does not support MCP natively** (Ollama, LM
+Studio, llama.cpp-server, vLLM OpenAI endpoint, etc.) the repo
+ships a tiny bridge that reuses the same circuit-breaker
+infrastructure:
+
+```bash
+# One-shot CLI driver
+python -m freecad_mcp.ollama_bridge \
+    "List every open FreeCAD document" \
+    --model qwen3.6:27b
+
+# Or embed in your own agent
+python - <<'PY'
+import asyncio
+from freecad_mcp.ollama_bridge import OllamaMCPBridge
+print(asyncio.run(OllamaMCPBridge().ask(
+    "Call health_check, summarise in one sentence."
+)))
+PY
+```
+
+The bridge spawns `mcp-freecad` over stdio, lists the 18 tools
+above, converts to Ollama / OpenAI function-calling schema, and
+loops until the model stops calling tools. Transient HTTP flakes
+retry through `CircuitBreaker`; tool errors are surfaced back to
+the model so a broken FreeCAD never stalls the conversation.
+
+`docs/OLLAMA_BRIDGE.md` covers the full config surface and the
+verified local Ollama setup; `docs/LM_STUDIO_BRIDGE.md` covers the
+slightly different shape needed for LM Studio's local server.
+
 ## Contributors
 
 <a href="https://github.com/yuri-schmaltz/mcp-freecad/graphs/contributors">

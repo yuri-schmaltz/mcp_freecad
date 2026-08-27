@@ -277,5 +277,82 @@ __all__ = [
     "ToggleRemoteConnectionsCommand",
     "ConfigureAllowedIPsCommand",
     "ToggleAutoStartCommand",
+    "ToggleRPCServerCommand",
     "_sync_toggle_states",
 ]
+
+
+class ToggleRPCServerCommand:
+    """Single toolbar button that starts OR stops the RPC server.
+
+    Replaces the two separate Start/Stop buttons in the workbench
+    toolbar. The button text and icon colour are recomputed on
+    ``Activated`` and on a 1 s Qt timer so the UI stays in sync with
+    the actual server state even when the server is stopped from
+    outside (auto-start failed, crash, etc.).
+    """
+
+    POLL_INTERVAL_MS = 1000
+
+    def GetResources(self):
+        return {
+            "MenuText": "Toggle RPC Server",
+            "ToolTip": "Start or stop the FreeCAD MCP RPC server.",
+        }
+
+    def _refresh_label(self):
+        try:
+            from . import rpc_server
+
+            running = rpc_server.is_rpc_server_running()
+        except Exception:
+            running = False
+        try:
+            import FreeCADGui
+            from PySide import QtCore, QtWidgets
+
+            action = FreeCADGui.getMainWindow().findChild(
+                QtWidgets.QAction, "ToggleRPCServer"
+            )
+            if action is not None:
+                action.setText(
+                    "Stop RPC Server" if running else "Start RPC Server"
+                )
+        except Exception:
+            pass
+
+    def Activated(self):
+        from . import rpc_server
+
+        msg = rpc_server.toggle_rpc_server()
+        try:
+            __import__("FreeCAD").Console.PrintMessage(f"[MCP] {msg}\n")
+        except Exception:
+            pass
+        self._refresh_label()
+        # Notify the dock panel if it is open.
+        try:
+            from ._panel import notify_status_change
+
+            notify_status_change()
+        except Exception:
+            pass
+
+    def IsActive(self):
+        return True
+
+    def start_refresh_timer(self):
+        """Called once after the workbench is Initialized."""
+        try:
+            from PySide import QtCore
+        except Exception:
+            return
+        QtCore.QTimer.singleShot(self.POLL_INTERVAL_MS, self._tick)
+
+    def _tick(self):
+        self._refresh_label()
+        try:
+            from PySide import QtCore
+        except Exception:
+            return
+        QtCore.QTimer.singleShot(self.POLL_INTERVAL_MS, self._tick)

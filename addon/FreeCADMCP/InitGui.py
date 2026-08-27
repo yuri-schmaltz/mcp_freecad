@@ -3,10 +3,9 @@ class FreeCADMCPAddonWorkbench(Workbench):
     ToolTip = "Addon for MCP Communication"
 
     def Initialize(self):
-
+        # Single toggle replaces the legacy Start / Stop pair.
         commands = [
-            "Start_RPC_Server",
-            "Stop_RPC_Server",
+            "Toggle_RPC_Server",
             "Toggle_Auto_Start",
             "Toggle_Remote_Connections",
             "Configure_Allowed_IPs",
@@ -14,8 +13,23 @@ class FreeCADMCPAddonWorkbench(Workbench):
         self.appendToolbar("FreeCAD MCP", commands)
         self.appendMenu("FreeCAD MCP", commands)
 
+        # Keep the toolbar/menu label in sync with the actual state.
+        try:
+            from rpc_server._commands import ToggleRPCServerCommand
+
+            self._toggle_cmd = ToggleRPCServerCommand()
+            self._toggle_cmd.start_refresh_timer()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[MCP] refresh timer setup failed: {e}\n")
+
     def Activated(self):
-        pass
+        # Open the MCP dock so the user immediately sees status + prompt.
+        from rpc_server._panel import show_panel
+
+        try:
+            show_panel()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[MCP] show_panel failed: {e}\n")
 
     def Deactivated(self):
         pass
@@ -27,7 +41,22 @@ class FreeCADMCPAddonWorkbench(Workbench):
         return "Gui::PythonWorkbench"
 
 
-Gui.addWorkbench(FreeCADMCPAddonWorkbench())
+FreeCADGui.addWorkbench(FreeCADMCPAddonWorkbench())
+
+
+# Back-compat: keep the original Start/Stop commands registered so external
+# scripts that look them up still work, but no longer surface them in the
+# toolbar (the Toggle button does both jobs).
+try:
+    from rpc_server._commands import (
+        StartRPCServerCommand,
+        StopRPCServerCommand,
+    )
+
+    FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
+    FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
+except Exception:
+    pass
 
 
 def _auto_start_mcp():
@@ -44,6 +73,5 @@ def _auto_start_mcp():
         FreeCAD.Console.PrintWarning(f"[MCP] Auto-start failed: {e}\n")
 
 
-from PySide import QtCore
-
-QtCore.QTimer.singleShot(0, _auto_start_mcp)
+if QtCore is not None:
+    QtCore.QTimer.singleShot(0, _auto_start_mcp)

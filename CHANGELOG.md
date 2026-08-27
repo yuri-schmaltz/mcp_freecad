@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**Theme: Wider LLM support.** Allows the MCP server to be driven
+by Ollama (and any OpenAI-API-shaped runtime) without first-class
+MCP support, plus a headless-render fallback for the FreeCAD
+addon. 26 new tests, 4 new dispatch tests, 93.69 % coverage
+(up from 86.68 %).
+
+### Added
+
+- **`freecad_mcp.ollama_bridge`** — new module: 60-statement
+  bridge (≤100 lines requirement met) that opens a stdio MCP
+  session to `mcp-freecad`, converts MCP `ToolDescription` to
+  Ollama / OpenAI function-calling schema, and runs a tool-call
+  loop. `CircuitBreaker` guards the HTTP transport; tool errors
+  are surfaced back to the model instead of propagating. Verified
+  end-to-end with `qwen3.6:27b` on Ollama 0.32.14 — two-step
+  loops with dict-argument parsing and error-envelope
+  roundtripping both work. See `docs/OLLAMA_BRIDGE.md`.
+- **`freecad_mcp.lmstudio_bridge`** — new module: 103-statement
+  bridge for **any** OpenAI-API-shaped LLM host (LM Studio Local
+  Server, llama.cpp `--server`, vLLM HTTP backend, etc). Exposes
+  two surfaces: an in-process `LMStudioMCPBridge.ask()` (mirrors
+  the Ollama bridge) **and** a stdlib `ThreadingHTTPServer` that
+  proxies `/v1/chat/completions` to the MCP session — letting
+  OpenAI-shaped clients drive FreeCAD without modifying the
+  upstream LLM. Zero new runtime deps. See
+  `docs/LM_STUDIO_BRIDGE.md`.
+- **`freecad_mcp._mcp_tool_loop`** — new shared driver module:
+  abstracts the tool-call loop (callback picker functions +
+  `ToolLoop` state machine + `_dispatch_tool`) so the two
+  bridges share the same loop logic and behave identically on
+  errors / overflow / max-iteration. 56 statements.
+- **`docs/OLLAMA_BRIDGE.md`** + **`docs/LM_STUDIO_BRIDGE.md`** —
+  two new guides covering the OpenAI-API-shaped bridge pattern
+  for non-MCP LLM hosts.
+- **15 new tests** covering the shared loop driver, the LM
+  Studio in-process ask path, and the HTTP proxy end-to-end
+  (live `ThreadingHTTPServer` + POST `/v1/chat/completions` +
+  404 + 400 JSON-parse error).
+
+### Fixed
+
+- **`_flush_gui_events` is now headless-safe.** When run under
+  `flatpak run --command=python3` (or any interpreter without
+  an active Qt event loop), the previous call to
+  `QtCore.QThread.msleep` would block indefinitely. The helper
+  now detects missing `QApplication.instance()` and `updateGui`
+  failures and falls back to plain `time.sleep`. The MCP probe
+  from the FreeCAD Flatpak gauntlet can now complete a
+  `system.listMethods` round-trip without the GUI helper hanging.
+  4 new tests in `tests/test_dispatch_module.py` cover
+  updateGui-raises, missing app instance, processEvents failure,
+  and msleep failure paths.
+
+### Documentation
+
+- **README** — added the Flatpak install path
+  (`~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/`)
+  with its `cp` command, alongside the existing Ubuntu / Debian /
+  Arch / macOS paths.
+
 ## [1.0.3] — 2026-08-26
 
 **Theme: Hardening & observability.** Audit gauntlet result — every

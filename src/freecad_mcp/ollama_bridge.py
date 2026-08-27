@@ -15,7 +15,6 @@ FreeCAD never stalls the conversation.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from dataclasses import dataclass
 from typing import Any, cast
@@ -24,17 +23,12 @@ import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from ._mcp_tool_loop import _result_to_text, mcp_tool_to_openai, run_tool_loop
 from .circuit_breaker import CircuitBreaker
 
-
-def _mcp_tool_to_ollama(tool: Any) -> dict[str, Any]:
-    schema = tool.inputSchema or {}
-    if schema.get("type") != "object":
-        schema = {**schema, "type": "object"}
-    schema.setdefault("properties", {})
-    return {"type": "function",
-            "function": {"name": tool.name, "description": tool.description or "",
-                         "parameters": schema}}
+# Back-compat aliases kept so older callers still work.
+_mcp_tool_to_ollama = mcp_tool_to_openai
+_result_to_text = _result_to_text
 
 
 @dataclass
@@ -60,63 +54,40 @@ class OllamaMCPBridge:
         return stdio_client(params)
 
     async def ask(self, question: str, *, model: str | None = None) -> str:
+        cfg = self.cfg
         async with (await self._open_mcp()) as (read, write), ClientSession(read, write) as session:
             await session.initialize()
-            ollama_tools = [_mcp_tool_to_ollama(t)
-                            for t in (await session.list_tools()).tools]
-            messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
-            chosen = model or self.cfg.model
-            async with httpx.AsyncClient(timeout=self.cfg.request_timeout_s) as http:
-                for _ in range(self.cfg.max_tool_iterations):
-                    payload: dict[str, Any] = {"model": chosen, "messages": messages, "stream": False}
-                    if ollama_tools:
-                        payload["tools"] = ollama_tools
-                    reply = (await self._post(http, payload)).get("message", {})
-                    if reply.get("tool_calls"):
-                        messages.append(reply)
-                        for call in reply["tool_calls"]:
-                            messages.append(await self._invoke(session, call))
-                        continue
-                    return (reply.get("content") or "").strip()
-        raise BridgeError("max_tool_iterations exceeded")
+            tools = [mcp_tool_to_openai(t)
+                     for t in (await session.list_tools()).tools]
+            chosen = model or cfg.model
+            payload = {"model": chosen, "stream": False}
 
-    async def _post(self, http: httpx.AsyncClient, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.cfg.ollama_url}/api/chat"
-        return await asyncio.to_thread(self._sync_post, url, payload)
+            async def _send(loop) -> None:
+                body = dict(payload)
+                body["messages"] = loop.messages
+                if tools:
+                    body["tools"] = tools
 
-    def _sync_post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        def _do() -> dict[str, Any]:
-            r = httpx.post(url, json=payload, timeout=self.cfg.request_timeout_s)
-            r.raise_for_status()
-            return cast(dict[str, Any], r.json())
-        return cast(dict[str, Any], self.breaker.call(_do))
-
-    async def _invoke(self, session: ClientSession, call: dict[str, Any]) -> dict[str, Any]:
-        fn = call.get("function", {}) or {}
-        name, raw_args = fn.get("name", ""), fn.get("arguments")
-        if isinstance(raw_args, str):
+                def _do() -> dict[str, Any]:
+                    r = httpx.post(f"{cfg.ollama_url}/api/chat", json=body,
+                                    timeout=cfg.request_timeout_s)
+                    r.raise_for_status()
+                    return cast(dict[str, Any], r.json())
+                loop.last_reply = cast(dict[str, Any],
+                                       self.breaker.call(_do))
+            init: list[dict[str, Any]] = [{"role": "user", "content": question}]
             try:
-                args = json.loads(raw_args) if raw_args.strip() else {}
-            except json.JSONDecodeError:
-                args = {}
-        else:
-            args = raw_args or {}
-        try:
-            result = await session.call_tool(name, args)
-        except Exception as exc:  # noqa: BLE001 — surface back to model
-            return {"role": "tool", "name": name,
-                    "content": json.dumps({"error": f"{type(exc).__name__}: {exc}"})}
-        return {"role": "tool", "name": name, "content": _result_to_text(result)}
-
-
-def _result_to_text(result: Any) -> str:
-    parts: list[str] = []
-    for item in getattr(result, "content", []) or []:
-        text = getattr(item, "text", None)
-        if text is None:
-            text = json.dumps(getattr(item, "data", ""), default=str)
-        parts.append(text if isinstance(text, str) else str(text))
-    return "\n".join(parts) or "(empty result)"
+                result = await run_tool_loop(
+                    session, init,
+                    pick_message=lambda r: cast(dict[str, Any], r.get("message", {})),
+                    pick_tool_calls=lambda r: list(r.get("tool_calls") or []),
+                    pick_content=lambda r: str(r.get("content") or ""),
+                    call_one_step=_send,
+                    max_iterations=cfg.max_tool_iterations,
+                )
+            except RuntimeError as exc:
+                raise BridgeError(str(exc)) from exc
+        return cast(str, result.content)
 
 
 def main() -> None:  # pragma: no cover

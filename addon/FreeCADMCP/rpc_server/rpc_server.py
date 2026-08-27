@@ -86,14 +86,11 @@ from .serialize import serialize_object
 
 # Backward-compat alias (legacy name in v0.3.x and earlier).
 _transcode_screenshot = transcode_to_format
-from ._commands import (
-    ConfigureAllowedIPsCommand,
-    StartRPCServerCommand,
-    StopRPCServerCommand,
-    ToggleAutoStartCommand,
-    ToggleRemoteConnectionsCommand,
-    _sync_toggle_states,
-)
+
+# NOTE: ``_commands`` is imported lazily at workbench-wiring time (see
+# below) to break the circular import:
+#   rpc_server → _commands → rpc_server (for start/stop)
+# ``_sync_toggle_states`` is also pulled in there for the same reason.
 
 # IP allowlist validation lives in :mod:`._ip_allowlist` (extracted
 # in v1.0.3 so the logic is testable without FreeCAD). The wrappers
@@ -1242,10 +1239,72 @@ def stop_rpc_server():
         return "RPC Server was not running."
 
 
-# --- Workbench wiring (runs on FreeCAD import) -----------------------------
+# --- Status helpers (used by the toolbar toggle + dock panel) ---------------
 
-FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
-FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
+
+def is_rpc_server_running() -> bool:
+    """Return ``True`` when the XML-RPC server thread is alive.
+
+    Cheap and side-effect free. Used by the dock panel / toolbar
+    toggle to colour the indicator and decide whether the next click
+    should stop or (re)start the server.
+    """
+    return rpc_server_instance is not None
+
+
+def get_rpc_status() -> dict[str, Any]:
+    """Return a snapshot of the RPC server state for the UI.
+
+    Keys: ``running`` (bool), ``host`` (str|None), ``port`` (int|None),
+    ``remote_enabled`` (bool), ``allowed_ips`` (str|None),
+    ``auto_start`` (bool), ``pid`` (int|None).
+    """
+    settings = load_settings()
+    running = is_rpc_server_running()
+    host: str | None = None
+    port: int | None = None
+    if running and rpc_server_instance is not None:
+        try:
+            server_addr = getattr(rpc_server_instance, "server_address", None)
+            if server_addr:
+                host, port = server_addr[0], server_addr[1]
+        except Exception:
+            host, port = None, None
+    return {
+        "running": running,
+        "host": host,
+        "port": port,
+        "remote_enabled": bool(settings.get("remote_enabled", False)),
+        "allowed_ips": settings.get("allowed_ips", "127.0.0.1"),
+        "auto_start": bool(settings.get("auto_start_rpc", False)),
+        "pid": rpc_server_thread.ident if rpc_server_thread else None,
+    }
+
+
+def toggle_rpc_server(port: int = 9875) -> str:
+    """Start the server if it is stopped, otherwise stop it.
+
+    Convenience wrapper used by the single-button toolbar toggle and
+    the dock panel — keeps the decision logic in one place so the UI
+    stays a thin view.
+    """
+    if is_rpc_server_running():
+        return stop_rpc_server()
+    return start_rpc_server(port=port)
+
+
+# Re-import here to break the cycle: _commands references this module
+# for ``start_rpc_server`` / ``stop_rpc_server``, but the toolbar
+# ``Toggle_RPC_Server`` command is registered below.
+from ._commands import (  # noqa: E402  (intentional late import)
+    ConfigureAllowedIPsCommand,
+    ToggleAutoStartCommand,
+    ToggleRemoteConnectionsCommand,
+    ToggleRPCServerCommand,
+    _sync_toggle_states,
+)
+
+FreeCADGui.addCommand("Toggle_RPC_Server", ToggleRPCServerCommand())
 FreeCADGui.addCommand("Toggle_Auto_Start", ToggleAutoStartCommand())
 FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
 FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())

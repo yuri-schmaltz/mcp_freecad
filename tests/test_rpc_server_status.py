@@ -120,6 +120,10 @@ _SUBMODS = (
     "_security_gate",
     "_commands",
     "_panel",
+    "mesh_to_solid",
+    "step_metadata",
+    "bom",
+    "fem_post_process",
 )
 for _sub in _SUBMODS:
     _spec = importlib.util.spec_from_file_location(

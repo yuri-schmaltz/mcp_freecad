@@ -316,6 +316,62 @@ class FreeCADConnection:
     def insert_part_from_library(self, relative_path: str, request_id: str | None = None) -> dict[str, Any]:
         return self.breaker.call(lambda: self.server.insert_part_from_library(relative_path, request_id))  # type: ignore[return-value]
 
+    def mesh_import(
+        self,
+        path: str,
+        doc_name: str | None = None,
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.mesh_import(path, doc_name, label))  # type: ignore[return-value]
+
+    def mesh_simplify(
+        self,
+        doc_name: str,
+        mesh_name: str,
+        target_faces: int = 5000,
+    ) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.mesh_simplify(doc_name, mesh_name, target_faces))  # type: ignore[return-value]
+
+    def mesh_to_solid(
+        self,
+        doc_name: str,
+        mesh_name: str,
+        new_name: str | None = None,
+        *,
+        repair: bool = True,
+        sew_tolerance: float = 1e-3,
+        max_triangles_before_simplify: int = 50_000,
+        target_faces_after_simplify: int = 5_000,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.mesh_to_solid(
+                doc_name,
+                mesh_name,
+                new_name,
+                repair,
+                sew_tolerance,
+                max_triangles_before_simplify,
+                target_faces_after_simplify,
+            )
+        )  # type: ignore[return-value]
+
+    def step_extract_metadata(self, path: str) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.step_extract_metadata(path))  # type: ignore[return-value]
+
+    def bom_export(
+        self,
+        doc_name: str,
+        fmt: str = "json",
+        include_extras: bool = False,
+        group_by_type: bool = True,
+    ) -> dict[str, Any]:
+        return self.breaker.call(
+            lambda: self.server.bom_export(doc_name, fmt, include_extras, group_by_type)
+        )  # type: ignore[return-value]
+
+    def fem_post_process(self, path: str) -> dict[str, Any]:
+        return self.breaker.call(lambda: self.server.fem_post_process(path))  # type: ignore[return-value]
+
     def execute_code(self, code: str, request_id: str | None = None) -> dict[str, Any]:
         return self._call_elevated(
             "execute_code",

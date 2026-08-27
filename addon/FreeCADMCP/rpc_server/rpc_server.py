@@ -84,6 +84,10 @@ from ._settings import (
     save_settings,  # noqa: F401  (re-exported for back-compat; external callers do rpc_mod.save_settings)
 )
 from .parts_library import get_parts_list, insert_part_from_library
+from .mesh_to_solid import mesh_import, mesh_simplify, mesh_to_solid
+from .step_metadata import step_extract_metadata
+from .bom import bom_export
+from .fem_post_process import fem_post_process
 from .serialize import serialize_object
 
 # Backward-compat alias (legacy name in v0.3.x and earlier).
@@ -591,6 +595,12 @@ class FreeCADRPC:
         "insert_part_from_library": 30.0,
         "run_fem_analysis": 600.0,
         "get_active_screenshot": 30.0,
+        "mesh_import": 30.0,
+        "mesh_simplify": 60.0,
+        "mesh_to_solid": 300.0,
+        "step_extract_metadata": 5.0,
+        "bom_export": 60.0,
+        "fem_post_process": 60.0,
         "cancel_request": 5.0,
     }
 
@@ -860,6 +870,88 @@ class FreeCADRPC:
             ok = self._delete_object_gui(doc_name, obj_name)
             return {"success": ok is True, "object_name": obj_name if ok is True else None, "error": None if ok is True else ok}
         return self._tracked_call(request_id, task, self._timeout_for("delete_object", timeout))
+
+    def mesh_import(self, path: str, doc_name: str | None = None, label: str | None = None) -> dict[str, Any]:
+        def task():
+            try:
+                return mesh_import(path=path, doc_name=doc_name, label=label)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+        return self._tracked_call(None, task, self._timeout_for("mesh_import"))
+
+    def mesh_simplify(self, doc_name: str, mesh_name: str, target_faces: int = 5000) -> dict[str, Any]:
+        def task():
+            try:
+                return mesh_simplify(doc_name=doc_name, mesh_name=mesh_name, target_faces=target_faces)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+        return self._tracked_call(None, task, self._timeout_for("mesh_simplify"))
+
+    def mesh_to_solid(
+        self,
+        doc_name: str,
+        mesh_name: str,
+        new_name: str | None = None,
+        repair: bool = True,
+        sew_tolerance: float = 1e-3,
+        max_triangles_before_simplify: int = 50_000,
+        target_faces_after_simplify: int = 5000,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return mesh_to_solid(
+                    doc_name=doc_name,
+                    mesh_name=mesh_name,
+                    new_name=new_name,
+                    repair=repair,
+                    sew_tolerance=sew_tolerance,
+                    max_triangles_before_simplify=max_triangles_before_simplify,
+                    target_faces_after_simplify=target_faces_after_simplify,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+        return self._tracked_call(None, task, self._timeout_for("mesh_to_solid", 120.0))
+
+    def step_extract_metadata(self, path: str) -> dict[str, Any]:
+        def task():
+            try:
+                return step_extract_metadata(path=path)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+        return self._tracked_call(None, task, self._timeout_for("step_extract_metadata"))
+
+    def bom_export(
+        self,
+        doc_name: str,
+        fmt: str = "json",
+        include_extras: bool = False,
+        group_by_type: bool = True,
+    ) -> dict[str, Any]:
+        def task():
+            try:
+                return bom_export(
+                    doc_name=doc_name,
+                    fmt=fmt,
+                    include_extras=include_extras,
+                    group_by_type=group_by_type,
+                )
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+        return self._tracked_call(None, task, self._timeout_for("bom_export", 60.0))
+
+    def fem_post_process(self, path: str) -> dict[str, Any]:
+        def task():
+            try:
+                return fem_post_process(path=path)
+            except Exception as e:
+                return {"success": False, "reason": f"{type(e).__name__}: {e}"}
+
+        return self._tracked_call(None, task, self._timeout_for("fem_post_process", 60.0))
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600, request_id: str | None = None) -> dict[str, Any]:
         try:

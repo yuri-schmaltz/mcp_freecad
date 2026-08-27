@@ -258,6 +258,10 @@ def load_rpc_server():
         "_security_gate",
         "_commands",
         "_panel",
+        "mesh_to_solid",
+        "step_metadata",
+        "bom",
+        "fem_post_process",
     )
 
     def _loader() -> types.ModuleType:

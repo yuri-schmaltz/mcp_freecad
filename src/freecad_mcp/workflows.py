@@ -407,6 +407,85 @@ class WorkflowRegistry:
                     )
         return results
 
+    def run_variants(
+        self,
+        name: str,
+        connection: "FreeCADConnection",
+        params: dict[str, builtins.list[Any]],
+        initial_args: dict[str, Any] | None = None,
+        *,
+        max_retries: int = 1,
+        max_combinations: int = 256,
+    ) -> builtins.list[dict[str, Any]]:
+        """Run a workflow over the Cartesian product of *params*.
+
+        ``params`` is ``{var_name: [value1, value2, ...]}``; for
+        each combination we substitute the values into the
+        workflow's ``{var}`` placeholders and call :meth:`run`.
+
+        Returns a list with one entry per combination::
+
+            {"combination": {"var": value, ...},
+             "results": [...per-step results...],
+             "success": True/False}
+
+        ``max_combinations`` guards against accidentally blowing up
+        a session with a 100×100 Cartesian product.
+        """
+        if not params:
+            return []
+        keys = list(params.keys())
+        # Build Cartesian product without itertools to keep imports
+        # lightweight (we already imported ``re`` and ``time``).
+        combinations: builtins.list[builtins.list[Any]] = [[]]
+        for k in keys:
+            new_combos: builtins.list[builtins.list[Any]] = []
+            values = params[k]
+            if not values:
+                raise WorkflowError(
+                    f"params[{k!r}] is empty; each list must have at least one value"
+                )
+            for combo in combinations:
+                for v in values:
+                    new_combos.append(combo + [v])
+            combinations = new_combos
+            if len(combinations) > max_combinations:
+                raise WorkflowError(
+                    f"params Cartesian product exceeds "
+                    f"{max_combinations} combinations "
+                    f"(currently {len(combinations)}); "
+                    f"raise max_combinations or shrink params"
+                )
+
+        out: builtins.list[dict[str, Any]] = []
+        for combo in combinations:
+            variant_args: dict[str, Any] = dict(initial_args or {})
+            variant_args.update(dict(zip(keys, combo)))
+            try:
+                steps = self.run(
+                    name,
+                    connection,
+                    variant_args,
+                    max_retries=max_retries,
+                )
+                success = all(s.get("success", False) for s in steps)
+                out.append(
+                    {
+                        "combination": dict(zip(keys, combo)),
+                        "results": steps,
+                        "success": success,
+                    }
+                )
+            except WorkflowError as e:
+                out.append(
+                    {
+                        "combination": dict(zip(keys, combo)),
+                        "results": [{"error": str(e)}],
+                        "success": False,
+                    }
+                )
+        return out
+
 
 def _validate_workflow(wf: Workflow) -> None:
     if not wf.name or not isinstance(wf.name, str):

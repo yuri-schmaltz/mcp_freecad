@@ -170,6 +170,14 @@ def test_all_tool_names_known():
         "get_profiler_stats",
         "list_replays",
         "get_replay",
+        # v1.1.1 — mesh → parametric-solid pipeline
+        "mesh_import",
+        "mesh_simplify",
+        "mesh_to_solid",
+        # v1.1.1 — quick wins from BACKLOG Tier 5
+        "step_extract_metadata",
+        "bom_export",
+        "fem_post_process",
     }
     assert ALL_TOOL_NAMES == frozenset(expected)
 

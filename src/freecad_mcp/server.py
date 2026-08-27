@@ -13,12 +13,14 @@ from mcp.types import ImageContent, TextContent
 from .diff import DocumentDiff, diff_documents
 from .freecad_client import FreeCADConnection
 from .operations import (
+    bom_export_operation,
     create_document_operation,
     create_object_operation,
     delete_object_operation,
     edit_object_operation,
     execute_code_operation,
     export_object_operation,
+    fem_post_process_operation,
     get_active_view_operation,
     get_object_operation,
     get_objects_operation,
@@ -27,9 +29,13 @@ from .operations import (
     health_check_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    mesh_import_operation,
+    mesh_simplify_operation,
+    mesh_to_solid_operation,
     redo_operation,
     run_fem_analysis_operation,
     save_document_operation,
+    step_extract_metadata_operation,
     undo_operation,
 )
 from .profiler import PerformanceProfiler, _profile_decorator, get_profiler
@@ -707,6 +713,114 @@ def get_parts_list(ctx: Context) -> list[TextContent]:
     return get_parts_list_operation(get_freecad_connection())
 
 
+@profile_tool
+@_guard_tool("mesh_import")
+@mcp.tool()
+def mesh_import(
+    ctx: Context,
+    path: str,
+    doc_name: str | None = None,
+    label: str | None = None,
+) -> ToolResponse:
+    """Import a mesh file (.stl/.obj/.ply/.off/.mesh/.smf/.wrl/.3ds/.dae)
+    into the FreeCAD document as a ``Mesh::Feature``.
+
+    Args:
+        path: Absolute path to the mesh file.
+        doc_name: Target document name (defaults to the active one).
+        label: Object label (defaults to the file stem).
+
+    Returns:
+        A JSON object with ``success``, ``object_name``, ``label``,
+        ``triangle_count`` and ``vertex_count``.
+    """
+    return mesh_import_operation(
+        get_freecad_connection(), path=path, doc_name=doc_name, label=label
+    )
+
+
+@profile_tool
+@_guard_tool("mesh_simplify")
+@mcp.tool()
+def mesh_simplify(
+    ctx: Context,
+    doc_name: str,
+    mesh_name: str,
+    target_faces: int = 5_000,
+) -> ToolResponse:
+    """Decimate a ``Mesh::Feature`` using quadric edge-collapse.
+
+    Args:
+        doc_name: Document that owns the mesh.
+        mesh_name: Name of the ``Mesh::Feature`` to simplify.
+        target_faces: Desired triangle count after decimation
+            (approximate).
+
+    Returns:
+        A JSON object with ``success``, ``triangle_count_before``,
+        ``triangle_count_after``, ``reduction_pct`` and optionally
+        ``skipped: True`` when the mesh is already small enough.
+    """
+    return mesh_simplify_operation(
+        get_freecad_connection(),
+        doc_name=doc_name,
+        mesh_name=mesh_name,
+        target_faces=target_faces,
+    )
+
+
+@profile_tool
+@_guard_tool("mesh_to_solid")
+@mcp.tool()
+def mesh_to_solid(
+    ctx: Context,
+    doc_name: str,
+    mesh_name: str,
+    new_name: str | None = None,
+    repair: bool = True,
+    sew_tolerance: float = 1e-3,
+    max_triangles_before_simplify: int = 50_000,
+    target_faces_after_simplify: int = 5_000,
+) -> ToolResponse:
+    """Convert a ``Mesh::Feature`` into a parametric ``Part::Feature`` solid.
+
+    This is the inverse-modeling pipeline: triangles → coplanar faces
+    → sewn shell → solid. The resulting object is editable in the
+    FreeCAD GUI (move faces, change dimensions, apply booleans, run
+    FEM).
+
+    Curved surfaces are recovered as triangle-facet approximations;
+    this tool cannot recover the original NURBS from a mesh.
+
+    Args:
+        doc_name: Document that owns the source mesh.
+        mesh_name: Name of the ``Mesh::Feature`` to convert.
+        new_name: Name of the resulting ``Part::Feature``. Defaults
+            to ``f"{mesh_name}_Solid"``.
+        repair: Run ``Part.fix`` + ``Shape.sewShape`` after
+            construction (highly recommended).
+        sew_tolerance: Sewing tolerance; smaller = stricter.
+        max_triangles_before_simplify: If the mesh has more triangles
+            than this, decimate first.
+        target_faces_after_simplify: Decimation target.
+
+    Returns:
+        A JSON object with ``success``, ``object_name``, ``shell_faces``,
+        ``solid`` (bool), ``volume``, ``triangle_count``,
+        ``decimated`` and ``repair_applied``.
+    """
+    return mesh_to_solid_operation(
+        get_freecad_connection(),
+        doc_name=doc_name,
+        mesh_name=mesh_name,
+        new_name=new_name,
+        repair=repair,
+        sew_tolerance=sew_tolerance,
+        max_triangles_before_simplify=max_triangles_before_simplify,
+        target_faces_after_simplify=target_faces_after_simplify,
+    )
+
+
 @_guard_tool("list_documents")
 @mcp.tool()
 def list_documents(ctx: Context) -> list[TextContent]:
@@ -716,6 +830,83 @@ def list_documents(ctx: Context) -> list[TextContent]:
         A list of document names.
     """
     return list_documents_operation(get_freecad_connection())
+
+
+@profile_tool
+@_guard_tool("step_extract_metadata")
+@mcp.tool()
+def step_extract_metadata(ctx: Context, path: str) -> ToolResponse:
+    """Extract AP214 metadata from a STEP Part 21 file (``.step`` / ``.stp``).
+
+    Reads the file directly (no FreeCAD subprocess needed) and
+    returns the structured ``FILE_DESCRIPTION`` / ``FILE_SCHEMA``
+    cards plus the most common HEADER fields (name, author,
+    organization, preprocessor_version, originating_system,
+    authorization).
+
+    Args:
+        path: Absolute path to a ``.step`` or ``.stp`` file.
+
+    Returns:
+        A JSON object with the metadata fields above.
+    """
+    return step_extract_metadata_operation(get_freecad_connection(), path=path)
+
+
+@profile_tool
+@_guard_tool("bom_export")
+@mcp.tool()
+def bom_export(
+    ctx: Context,
+    doc_name: str,
+    fmt: str = "json",
+    include_extras: bool = False,
+    group_by_type: bool = True,
+) -> ToolResponse:
+    """Export a Bill of Materials for *doc_name*.
+
+    Args:
+        doc_name: Document to introspect.
+        fmt: ``"json"`` (default) or ``"csv"``.
+        include_extras: Include non-dimension properties (JSON only).
+        group_by_type: When True (default), identical parts are
+            collapsed and ``quantity`` increments.
+
+    Returns:
+        A JSON object (``fmt="json"``) or raw CSV text (``fmt="csv"``).
+    """
+    return bom_export_operation(
+        get_freecad_connection(),
+        doc_name=doc_name,
+        fmt=fmt,
+        include_extras=include_extras,
+        group_by_type=group_by_type,
+    )
+
+
+@profile_tool
+@_guard_tool("fem_post_process")
+@mcp.tool()
+def fem_post_process(ctx: Context, path: str) -> ToolResponse:
+    """Parse a CalculiX ``.frd`` result file and extract numerical data.
+
+    Returns per-node displacements (with the |U| vector magnitude)
+    and per-element stresses (including the von Mises value), plus
+    a summary block with max/min/mean displacement and max von
+    Mises stress.
+
+    PNG contour plots are not produced in this version (see v1.4
+    roadmap); the LLM gets a numerical table it can reason about.
+
+    Args:
+        path: Absolute path to a ``.frd`` file written by CalculiX.
+
+    Returns:
+        A JSON object with ``success``, ``step``, ``node_count``,
+        ``displacement_count``, ``stress_count``, ``summary`` and
+        the worst-case node and element entries.
+    """
+    return fem_post_process_operation(get_freecad_connection(), path=path)
 
 
 @_guard_tool("run_fem_analysis")

@@ -186,7 +186,8 @@ _pkg.__path__ = [str(_RS_DIR)]
 sys.modules["_test_obj_gui_pkg"] = _pkg
 for sub in ("parts_library", "serialize", "_fem_workdir", "_request_tracking",
             "_security_gate", "_settings", "_screenshot", "_ip_allowlist",
-            "_dispatch", "_commands", "rpc_server"):
+            "_dispatch", "_commands", "mesh_to_solid", "step_metadata",
+            "bom", "fem_post_process", "rpc_server"):
     spec = importlib.util.spec_from_file_location(
         f"{_pkg}.{sub}", str(_RS_DIR / f"{sub}.py")
     )

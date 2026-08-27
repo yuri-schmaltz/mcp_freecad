@@ -278,4 +278,6 @@ Para marcar v1.0:
 
 * [`AUDIT_2026-08-27.md`](AUDIT_2026-08-27.md) — feature drop v1.1.0
   (6 novos tools MCP, 4 resources, 6 novos módulos, 84 testes novos).
+* [`BACKLOG_FEATURES.md`](BACKLOG_FEATURES.md) — backlog priorizado
+  de features de alto retorno para v1.2+.
 * [`CHANGELOG.md`](../CHANGELOG.md) — histórico de releases.

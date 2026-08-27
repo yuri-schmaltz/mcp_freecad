@@ -349,3 +349,138 @@ def health_check_operation(
     else:
         payload = {**fc_status, "circuit_breaker": breaker}
     return json_response(payload)
+
+
+@safe_operation
+def mesh_import_operation(
+    freecad: FreeCADConnection,
+    path: str,
+    doc_name: str | None = None,
+    label: str | None = None,
+) -> ToolResponse:
+    """Import a mesh file (.stl/.obj/.ply/.off/.mesh/.smf/.wrl/.3ds/.dae).
+
+    Returns a JSON object with ``object_name``, ``label``,
+    ``triangle_count`` and ``vertex_count`` on success.
+    """
+    res = freecad.mesh_import(path=path, doc_name=doc_name, label=label)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"mesh_import failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def mesh_simplify_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    mesh_name: str,
+    target_faces: int = 5_000,
+) -> ToolResponse:
+    """Decimate a ``Mesh::Feature`` to approximately *target_faces* triangles.
+
+    The FreeCAD ``Mesh.Mesh.decimate`` API takes a *reduction ratio*,
+    not a target count; we convert internally.
+    """
+    res = freecad.mesh_simplify(
+        doc_name=doc_name, mesh_name=mesh_name, target_faces=target_faces
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"mesh_simplify failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def mesh_to_solid_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    mesh_name: str,
+    new_name: str | None = None,
+    repair: bool = True,
+    sew_tolerance: float = 1e-3,
+    max_triangles_before_simplify: int = 50_000,
+    target_faces_after_simplify: int = 5_000,
+) -> ToolResponse:
+    """Convert a ``Mesh::Feature`` into a parametric ``Part::Feature``.
+
+    The resulting solid is editable like any other FreeCAD solid:
+    dimensions can be modified (within the precision of the input
+    mesh), booleans can be applied, and FEM can be run on it.
+
+    Returns a JSON object with ``object_name``, ``shell_faces``,
+    ``solid`` (bool), ``volume``, ``triangle_count`` and
+    ``decimated``.
+    """
+    res = freecad.mesh_to_solid(
+        doc_name=doc_name,
+        mesh_name=mesh_name,
+        new_name=new_name,
+        repair=repair,
+        sew_tolerance=sew_tolerance,
+        max_triangles_before_simplify=max_triangles_before_simplify,
+        target_faces_after_simplify=target_faces_after_simplify,
+    )
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"mesh_to_solid failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def step_extract_metadata_operation(freecad: FreeCADConnection, path: str) -> ToolResponse:
+    """Extract AP214 metadata from a STEP Part 21 file.
+
+    Returns a JSON object with ``success``, ``path``, ``description``,
+    ``schema``, ``implementation_level``, ``name``, ``author``,
+    ``organization``, ``preprocessor_version``, ``originating_system``,
+    ``authorization`` and ``size_bytes``.
+    """
+    res = freecad.step_extract_metadata(path=path)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"step_extract_metadata failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def bom_export_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    fmt: str = "json",
+    include_extras: bool = False,
+    group_by_type: bool = True,
+) -> ToolResponse:
+    """Export a Bill of Materials from *doc_name*.
+
+    ``fmt`` is ``"json"`` (default) or ``"csv"``. ``include_extras``
+    adds every non-dimension property to each JSON entry. When
+    ``group_by_type`` is True (default), identical parts are
+    collapsed and ``quantity`` increments.
+    """
+    res = freecad.bom_export(
+        doc_name=doc_name,
+        fmt=fmt,
+        include_extras=include_extras,
+        group_by_type=group_by_type,
+    )
+    if res.get("success"):
+        # The data may already be a CSV string; surface it as-is.
+        if res.get("format") == "csv":
+            return text_response(res["data"])
+        return json_response(res)
+    return text_response(f"bom_export failed: {res.get('reason', 'unknown error')}")
+
+
+@safe_operation
+def fem_post_process_operation(freecad: FreeCADConnection, path: str) -> ToolResponse:
+    """Parse a CalculiX ``.frd`` result file.
+
+    Returns a JSON object with ``success``, ``path``, ``step``,
+    ``node_count``, ``displacement_count``, ``stress_count``,
+    ``summary`` (max/min/mean displacement, max von Mises) plus
+    the worst-case node and element entries.
+
+    PNG contour plots are not produced in this version (see v1.4
+    roadmap); only numerical tables.
+    """
+    res = freecad.fem_post_process(path=path)
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"fem_post_process failed: {res.get('reason', 'unknown error')}")

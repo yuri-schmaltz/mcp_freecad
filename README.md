@@ -1,10 +1,11 @@
-[![Tests](https://img.shields.io/badge/tests-612_passed-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-776_passed-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen)](tests/)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-1.12.2%2B-purple)](https://modelcontextprotocol.io)
-[![Release](https://img.shields.io/badge/release-v1.0.3-blue)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.1.0-blue)](CHANGELOG.md)
 [![Security: TLS%20%2B%20bearer%20auth](https://img.shields.io/badge/security-TLS%20%2B%20bearer%20auth-orange)](SECURITY.md)
+[![Features](https://img.shields.io/badge/features-streaming%20%7C%20profiler%20%7C%20replay%20%7C%20workflows-blueviolet)](CHANGELOG.md)
 
 # FreeCAD MCP
 
@@ -13,7 +14,10 @@
 > screenshots, and manage the parts library — all through typed,
 > validated tool calls.
 
-**Status:** v1.0.3 — hardening + observability pass. 612 tests, 87 % coverage, ruff & mypy clean.
+**Status:** v1.1.0 — feature drop. **24 MCP tools**, **4 MCP resources**,
+streaming output, performance profiler, session replay, document diff,
+reusable workflows, dark/light theme, prompt template gallery, standalone
+web UI. 776 tests passing, ruff & mypy clean.
 **Origin:** originated as a fork of [neka-nat/freecad-mcp](https://github.com/neka-nat/freecad-mcp);
 now an independent project under active development.
 
@@ -261,6 +265,13 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 
 ## Tools
 
+The server exposes **24 typed MCP tools**. The first 18 are the original
+design / query / screenshot primitives; the remaining 6 were added in
+**v1.1.0** to give operators production-grade observability and
+reproducibility.
+
+### Core design tools (v1.0)
+
 * `create_document`: Create a new document in FreeCAD.
 * `create_object`: Create a new object in FreeCAD.
 * `edit_object`: Edit an object in FreeCAD.
@@ -278,6 +289,77 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `export_object`: Export a single object to STL / STEP / IGES / etc.
 * `get_active_view`: Inspect the active view (type, size, saveImage support).
 * `health_check`: Liveness probe for monitoring (uptime, queue sizes, settings path).
+
+### v1.1.0 — observability & reproducibility
+
+* `diff_documents(doc_a, doc_b)` — structured per-object diff between two
+  open FreeCAD documents (added / removed / modified / unchanged),
+  rendered as JSON or Markdown. Useful for review and regression tests.
+* `list_workflows()` — list every workflow currently registered
+  (built-ins + user-defined from `~/.config/FreeCAD/mcp-freecad/workflows.json`).
+* `run_workflow(name, args)` — execute a registered workflow against the
+  live FreeCAD connection. Supports `{var}` and `{prev.X}` template
+  substitution; optional steps are skipped on failure.
+* `get_profiler_stats()` — return per-tool percentile stats (count,
+  mean, p50/p95/p99, max) from the in-process ring buffer, plus a
+  collapsed-stack flamegraph export ready for
+  [`flamegraph.pl`](https://github.com/brendangregg/FlameGraph).
+* `list_replays()` — list every recorded session replay on disk.
+* `get_replay(session_id, format, dry_run)` — fetch a replay as JSON,
+  Markdown, or actually re-execute it against the live connection
+  (`dry_run=True` skips destructive tools for safety).
+
+## MCP resources (v1.1.0)
+
+Read-only data surfaces the MCP client can attach without invoking a tool:
+
+* `freecad://server/policy` — the currently effective tool policy
+  (enabled set, denylist, elevated-tool gate).
+* `freecad://server/metrics` — a Prometheus-style snapshot of every
+  counter, gauge, and histogram in the registry.
+* `freecad://server/profiler` — same payload as `get_profiler_stats`.
+* `freecad://server/replay-dir` — the on-disk directory used to
+  persist session replays.
+
+## v1.1.0 — operator experience
+
+The v1.1.0 drop is not just new tools. The FreeCAD-side dock panel
+(`MCPControlPanel`) also gained five quality-of-life upgrades:
+
+* **Streaming output** — `execute_code` is wrapped in an
+  `OutputBuffer` that captures every line of the FreeCAD return value
+  and reports progress through the FastMCP `ctx.report_progress`
+  coroutine. The MCP client UI shows incremental updates instead of a
+  single big blob at the end.
+* **Prompt template gallery** — five built-in templates
+  (Listar documentos, Health check, Caixa 10x10x10, Auditoria FEM,
+  Diff de documentos) plus a `QComboBox` in the dock. Custom
+  templates persist to
+  `~/.config/FreeCAD/mcp-freecad/prompt_templates.json`.
+* **Dark / light / auto theme** — the panel palette switches on
+  demand or follows the FreeCAD main window's luminance. Cycle from
+  the toolbar via `cycle_theme()`.
+* **Session replay** — every dispatched tool call is appended to a
+  `SessionRecorder` (thread-safe, fsync'd per step). Replays live in
+  `~/.config/FreeCAD/mcp-freecad/replays/<session_id>.json`. The
+  `get_replay` MCP tool can render them as Markdown for incident
+  reports.
+* **Standalone web UI** — `python -m freecad_mcp.web_ui` starts a
+  FastAPI app on `127.0.0.1:8765` (override with
+  `FREECAD_MCP_WEB_PORT`) that exposes a simple form for one-off
+  interaction without an MCP-capable host. Useful for ad-hoc testing.
+
+## Performance & observability
+
+* Every tool call is observed by an in-process `PerformanceProfiler`
+  (1 000-entry ring buffer, thread-safe under `RLock`).
+* The `freecad://server/profiler` resource exposes the same data
+  the `get_profiler_stats` tool does, so a Prometheus sidecar or an
+  LLM-driven observability run can scrape without invoking a write
+  tool.
+* Slow calls (default threshold 500 ms, override with
+  `FREECAD_MCP_SLOW_THRESHOLD_MS`) are logged at INFO level so a tail
+  of the MCP log shows hot spots.
 
 ## Ollama & other OpenAI-API-shaped runtimes
 
@@ -350,6 +432,16 @@ This project now integrates directives from `docs/gabarito_ia.pdf` (extracted to
 | `FREECAD_MCP_TLS_CERT` | — | PEM certificate path. Required for remote RPC. |
 | `FREECAD_MCP_TLS_KEY` | — | PEM private key path. Required for remote RPC. |
 | `FREECAD_MCP_AUTH_TOKEN` | — | Shared bearer secret. Required for remote RPC. |
+| `FREECAD_MCP_LIVENESS_CHECK_S` | `30` | Seconds between background pings of the cached FreeCAD connection. |
+| `FREECAD_MCP_ALLOW_ELEVATED_TOOLS` | `false` | Opt-in flag for tools marked *elevated* (`execute_code`, `run_fem_analysis`). Token auth is also enforced at runtime. |
+| `FREECAD_MCP_REPLAY_DIR` | `~/.config/FreeCAD/mcp-freecad/replays` | Where `SessionRecorder` writes per-session replay JSON files. |
+| `FREECAD_MCP_SLOW_THRESHOLD_MS` | `500` | Tool calls above this duration are logged at INFO level by the profiler. |
+| `FREECAD_MCP_PANEL_THEME` | `auto` | Dock panel theme — `light`, `dark`, or `auto` (follows FreeCAD window luminance). |
+| `FREECAD_MCP_PROMPT_TEMPLATES_PATH` | `~/.config/FreeCAD/mcp-freecad/prompt_templates.json` | Where custom prompt templates are persisted. |
+| `FREECAD_MCP_WEB_PORT` | `8765` | Port for `python -m freecad_mcp.web_ui` standalone web UI. |
+| `FREECAD_MCP_WEB_HOST` | `127.0.0.1` | Bind host for the web UI. |
+| `FREECAD_MCP_WEB_MODEL` | `qwen3.6:27b` | Default Ollama model in the web UI prompt. |
+| `FREECAD_MCP_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint proxied by the web UI. |
 
 ## Monitoring
 
@@ -394,8 +486,17 @@ Useful alerts:
 python -m venv .venv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 python -m pip install -e ".[dev]"
-pytest                      # ~318 tests, ~7s, no FreeCAD required
+pytest                      # ~776 tests, ~12s, no FreeCAD required
 pytest -m freecad           # integration tests (need a running FreeCAD)
+```
+
+The standalone web UI (`freecad_mcp.web_ui`) is an opt-in surface.
+It pulls `fastapi` and `httpx` lazily; install them only when you
+plan to launch the web UI:
+
+```bash
+pip install fastapi httpx
+python -m freecad_mcp.web_ui
 ```
 
 CI is configured in `.github/workflows/ci.yml` to run `pytest` (with

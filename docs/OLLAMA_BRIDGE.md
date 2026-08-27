@@ -126,3 +126,12 @@ The CLI smoke is reproducible with `_bridge_smoke.py` style scripts
   out-of-band.
 * **stdio transport only.** Remote MCP servers via SSE/HTTP are not
   yet wired up; pull requests welcome.
+
+## See also
+
+* [`LM_STUDIO_BRIDGE.md`](LM_STUDIO_BRIDGE.md) — the OpenAI-API-shaped
+  cousin that adds an HTTP proxy (`/v1/chat/completions`).
+* The **standalone web UI** (`python -m freecad_mcp.web_ui`, added in
+  v1.1.0) is a thin FastAPI form that proxies the same Ollama
+  `/api/chat` endpoint — useful when you don't even want an MCP host
+  in the loop.

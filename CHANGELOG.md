@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-08-27
+
+**Theme: Observability & reproducibility.** Six new MCP tools, four
+new MCP resources, four new in-process modules, and five new
+operator-facing upgrades to the FreeCAD dock panel. **776 tests
+passing** (up from 692), ruff & mypy clean.
+
+### Added — server-side modules
+
+- **`freecad_mcp.streaming`** — `OutputBuffer` + `ProgressDebouncer`
+  + `stream_output(ctx)`. Captures every line the FreeCAD `execute_code`
+  response contains (after stripping the `Output: ` and
+  ``
+  `Python code execution scheduled.` prefixes) and reports progress
+  via the FastMCP `Context.report_progress` coroutine so MCP host
+  UIs see incremental updates. Thread-safe under `threading.Lock`.
+- **`freecad_mcp.replay`** — `SessionRecorder` (thread-safe under
+  `threading.Lock`) appends every dispatched tool call to a JSON file
+  with atomic `tmp + fsync + os.replace`. Replays land in
+  `~/.config/FreeCAD/mcp-freecad/replays/<session_id>.json`. The
+  `get_replay(session_id, format="replay")` tool can replay against
+  the live connection; destructive tools are skipped by default
+  (`dry_run=True`) and require `allow_destructive=True` to actually
+  run. Export formats: `json`, `markdown`, `replay`.
+- **`freecad_mcp.profiler`** — `PerformanceProfiler` ring buffer
+  (default 1 000 entries, thread-safe under `RLock`) with per-tool
+  percentile stats (`count`, `mean_ms`, `p50_ms`, `p95_ms`,
+  `p99_ms`, `max_ms`) and a collapsed-stack flamegraph export
+  (`tool_name count duration_ms`) ready for Brendan Gregg's
+  `flamegraph.pl`. Singleton accessor `get_profiler()` and a
+  decorator `_profile_decorator` (re-exported as `profile_tool`
+  in `server.py`) wrap every tool call. Slow calls above
+  `FREECAD_MCP_SLOW_THRESHOLD_MS` (default 500) are logged at INFO.
+- **`freecad_mcp.diff`** — `DocumentDiff` dataclass with
+  `objects_added`, `objects_removed`, `objects_modified`,
+  `objects_unchanged` plus per-property diffs (`properties_added`,
+  `properties_removed`, `properties_modified`). Renders as a
+  Markdown summary or a full JSON tree via `as_dict()`.
+- **`freecad_mcp.workflows`** — `Workflow` + `WorkflowStep` +
+  `WorkflowRegistry`. Three built-ins
+  (`create-box-with-save`, `safe-execute`, `duplicate-object`),
+  JSON persistence to `~/.config/FreeCAD/mcp-freecad/workflows.json`,
+  two-pass template substitution (`{var}` user vars first, then
+  `{prev.X}` dotted-path references to the previous step's return
+  value), `optional=True` steps that skip on raised exception,
+  and a guidelines pre-check for `execute_code`.
+- **`freecad_mcp.web_ui`** — `create_web_app(freecad, ollama_url,
+  default_model)` FastAPI factory with `GET /`, `POST /ask`,
+  `GET /health`, `GET /docs`. Launch with `python -m freecad_mcp.web_ui`
+  (port `FREECAD_MCP_WEB_PORT`, default 8765). Opt-in deps:
+  `pip install fastapi httpx`.
+
+### Added — MCP tools (6)
+
+* `diff_documents(doc_a, doc_b)` — structured diff between two open
+  FreeCAD documents.
+* `list_workflows()` — return every registered workflow
+  (built-in + user).
+* `run_workflow(name, args)` — execute a registered workflow against
+  the live connection.
+* `get_profiler_stats()` — per-tool percentile stats + flamegraph
+  export from the in-process profiler.
+* `list_replays()` — list every recorded session replay on disk.
+* `get_replay(session_id, format, dry_run)` — fetch a replay as JSON,
+  Markdown, or re-execute it (`dry_run=True` by default).
+
+### Added — MCP resources (4)
+
+Read-only data surfaces the MCP client can attach without invoking a
+write tool:
+
+* `freecad://server/policy` — the currently effective tool policy
+  (enabled set, denylist, elevated-tool gate, all known tools).
+* `freecad://server/metrics` — Prometheus-style snapshot of every
+  counter, gauge, and histogram in the registry.
+* `freecad://server/profiler` — same payload as `get_profiler_stats`.
+* `freecad://server/replay-dir` — the on-disk directory used to
+  persist session replays.
+
+### Added — FreeCAD dock panel (addon side)
+
+* **Prompt template gallery** — `_prompt_templates.py` with five
+  built-ins (`Listar documentos`, `Health check`, `Caixa 10x10x10`,
+  `Auditoria FEM`, `Diff de documentos`), a `QComboBox` in the dock
+  to insert them into the prompt field, and persistence to
+  `~/.config/FreeCAD/mcp-freecad/prompt_templates.json`.
+* **Dark / light / auto theme** — `cycle_theme()` toggles between
+  the three. `auto` follows the FreeCAD main window's palette
+  luminance. Override with `FREECAD_MCP_PANEL_THEME`.
+* **Resizable log view** — the log `QPlainTextEdit` is now
+  `Expanding`-policy so it fills the dock when the user resizes it.
+
+### Changed
+
+- **`ALL_TOOL_NAMES` extended** in `tool_policy.py` with the six new
+  tools. `test_all_tool_names_known` now asserts the 24-tool set.
+- **`freecad_mcp.server.execute_code`** wraps the operation in an
+  `OutputBuffer` and calls `_observe_tool_call` / `_finalize_tool_call`
+  so every code execution is recorded by the `SessionRecorder` even
+  on exceptions.
+- **`ProfileEntry`** uses `dataclass` (was `dict`) and `PerformanceProfiler`
+  uses `collections.deque(maxlen=N)` for O(1) ring-buffer eviction.
+
+### Tests
+
+- **84 new tests** across seven new files: `test_streaming.py`,
+  `test_replay.py`, `test_profiler.py`, `test_diff.py`,
+  `test_workflows.py`, `test_web_ui.py`, `test_prompt_templates.py`.
+  Coverage of the new modules is 100 %. Total: **776 tests passing in
+  ~12s**, ruff 0 errors, mypy 0 errors (24 source files).
+- The shared PySide/FreeCAD stub in `tests/conftest.py` grew
+  `QComboBox` and `QSizePolicy` so the dock panel can be instantiated
+  in unit tests.
+
+### Bug fixes caught during integration
+
+- **`_lookup_replay_method` was eagerly evaluating
+  `connection.create_document`**, raising `AttributeError` on test
+  stubs missing one of the 18 methods. Fixed with `getattr(connection,
+  tool_name, None)`.
+- **Built-in workflow templates used the MCP tool argument shape**
+  (`obj_type` / `obj_name` / `obj_properties`) but `WorkflowRegistry`
+  calls `connection.create_object(obj_data=…)`. Fixed by switching
+  the templates to the `obj_data` dict format.
+- **`SessionRecorder` was missing `__len__`** — `len(rec)` raised
+  `TypeError`. Added.
+- **mypy rejected `WorkflowRegistry.list`** because the method name
+  shadowed the built-in `list` type. Fixed by annotating as
+  `builtins.list[str]` instead of `list[str]`.
+- **mypy rejected the new MCP tool return types** (`list[TextContent]`)
+  because `text_response` returns `list[TextContent | ImageContent]`.
+  Fixed by importing `ToolResponse` and using it as the return type.
+
+## [1.0.4 (Unreleased prior entry)]
+
 **Theme: Wider LLM support.** Allows the MCP server to be driven
 by Ollama (and any OpenAI-API-shaped runtime) without first-class
 MCP support, plus a headless-render fallback for the FreeCAD

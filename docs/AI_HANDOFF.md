@@ -1,5 +1,9 @@
 # Handoff para IA — mcp-freecad
 
+> **Status atual:** v1.1.0 (776 tests, 24 MCP tools, 4 resources). Este
+> documento registra o handoff original de v0.1.18; auditorias mais
+> recentes estão em [`AUDIT_2026-08-27.md`](AUDIT_2026-08-27.md).
+
 Objetivo
 -------
 Este documento registra o que foi feito durante a análise/correção e descreve os próximos passos para que outro agente de IA (ou humano) retome o desenvolvimento.

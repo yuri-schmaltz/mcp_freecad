@@ -53,3 +53,11 @@ The proxy is exercised in `tests/test_lmstudio_bridge.py`. Live
 verification was scope-limited in this gauntlet pass because the
 local LM Studio binary requires a GUI to start its server; the
 unit tests use a fake OpenAI-compatible upstream and pass.
+
+## See also
+
+* [`OLLAMA_BRIDGE.md`](OLLAMA_BRIDGE.md) — the Ollama-flavoured
+  equivalent.
+* The **standalone web UI** (`python -m freecad_mcp.web_ui`, added
+  in v1.1.0) is the simplest surface for ad-hoc interaction with
+  any OpenAI-API-shaped host.

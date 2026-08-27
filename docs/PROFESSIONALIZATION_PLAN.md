@@ -273,3 +273,9 @@ Para marcar v1.0:
 - Sandbox completo de `execute_code` — documentado como limitação, recomenda-se container.
 - FreeCAD < 0.21 — muito antigo, ABI mudou demais.
 - Auto-update — feature perigosa pra ferramenta de segurança.
+
+## Auditorias e planos posteriores
+
+* [`AUDIT_2026-08-27.md`](AUDIT_2026-08-27.md) — feature drop v1.1.0
+  (6 novos tools MCP, 4 resources, 6 novos módulos, 84 testes novos).
+* [`CHANGELOG.md`](../CHANGELOG.md) — histórico de releases.

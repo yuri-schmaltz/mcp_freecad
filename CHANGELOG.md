@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.5] — 2026-08-28
+
+### Fixed
+
+- **`ollama_bridge` urllib fallback** — when launched from the dock
+  panel against a Python that doesn't have `httpx` installed (the
+  common Flatpak + system-`python3` case), the bridge crashed with
+  `ModuleNotFoundError: No module named 'httpx'`. The single
+  `httpx.post` call site is now wrapped in a `_post_json(url, body,
+  timeout)` helper that uses `httpx` when importable and falls back
+  to `urllib.request` otherwise. No behavior change for callers
+  that already have httpx.
+
+### Added — tests
+
+- 2 new tests in `test_ollama_bridge.py` exercising both the httpx
+  and urllib code paths with tiny in-process HTTP servers.
+
 ## [1.1.4] — 2026-08-28
 
 ### Added — Ollama model picker

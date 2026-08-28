@@ -4,6 +4,7 @@ We don't need a real Ollama server or a real MCP server here — we
 stub the Ollama HTTP roundtrip and the MCP session so the bridge
 loop can be exercised end-to-end on its own.
 """
+
 import sys
 import types
 from pathlib import Path
@@ -83,12 +84,16 @@ def test_result_to_text_multiple_parts_joined_by_newline():
 
 class _FakeSession:
     def __init__(self):
-        self.tools = [_StubTool("echo", "echo back", {"type": "object"}),
-                      _StubTool("noop", "no-op", {"type": "object"})]
+        self.tools = [
+            _StubTool("echo", "echo back", {"type": "object"}),
+            _StubTool("noop", "no-op", {"type": "object"}),
+        ]
         self.calls: list[tuple[str, dict]] = []
-        self.next_result = types.SimpleNamespace(content=[
-            types.SimpleNamespace(text="echo says hi", data=None),
-        ])
+        self.next_result = types.SimpleNamespace(
+            content=[
+                types.SimpleNamespace(text="echo says hi", data=None),
+            ]
+        )
 
     async def initialize(self): ...
 
@@ -133,27 +138,41 @@ def patched_bridge(monkeypatch):
 
     # First HTTP reply: model decides to call a tool.
     # Second HTTP reply: model gives a final answer.
-    http = _FakeHttp([
-        # After first user message
-        {"message": {"role": "assistant", "content": "", "tool_calls": [
-            {"function": {"name": "echo", "arguments": {"msg": "hi"}}}]}},
-        # After tool result
-        {"message": {"role": "assistant", "content": "Done. Final answer."}},
-    ])
+    http = _FakeHttp(
+        [
+            # After first user message
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "echo", "arguments": {"msg": "hi"}}}],
+                }
+            },
+            # After tool result
+            {"message": {"role": "assistant", "content": "Done. Final answer."}},
+        ]
+    )
 
     sess = _FakeSession()
-    sess.next_result = types.SimpleNamespace(content=[
-        types.SimpleNamespace(text="echo says hi", data=None),
-    ])
+    sess.next_result = types.SimpleNamespace(
+        content=[
+            types.SimpleNamespace(text="echo says hi", data=None),
+        ]
+    )
 
     # Stub out the high-level transports
     monkeypatch.setattr(ob.httpx, "post", lambda url, json, timeout: http.post(url, json, timeout))
 
     # Patch stdio_client via the bridge's _open_mcp so we sidestep real MCP.
     class _FakeOpen:
-        def __init__(self): self._cm = self  # self acts as both factory + cm
-        async def __aenter__(self): return (object(), object())
-        async def __aexit__(self, *exc): return False
+        def __init__(self):
+            self._cm = self  # self acts as both factory + cm
+
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
 
     async def _fake_open_mcp():
         return _FakeOpen()
@@ -161,8 +180,7 @@ def patched_bridge(monkeypatch):
     bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
     # Inject the fake session into ClientSession via monkeypatch.
     real_session = ob.ClientSession
-    monkeypatch.setattr(ob, "ClientSession",
-                        lambda r, w: _PatchSessionCM(sess))
+    monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
 
     yield bridge, sess, http
 
@@ -172,11 +190,14 @@ def patched_bridge(monkeypatch):
 class _PatchSessionCM:
     """Async cm that yields a fake session instead of going to MCP."""
 
-    def __init__(self, session): self._s = session
+    def __init__(self, session):
+        self._s = session
 
-    async def __aenter__(self): return self._s
+    async def __aenter__(self):
+        return self._s
 
-    async def __aexit__(self, *exc): return False
+    async def __aexit__(self, *exc):
+        return False
 
 
 async def test_ask_one_tool_call_returns_final_answer(patched_bridge):
@@ -192,23 +213,41 @@ async def test_ask_one_tool_call_returns_final_answer(patched_bridge):
 async def test_ask_raises_when_model_keeps_calling_tools(monkeypatch):
     cfg = ob.OllamaBridgeConfig(max_tool_iterations=2)
     bridge = ob.OllamaMCPBridge(cfg)
-    http = _FakeHttp([
-        {"message": {"role": "assistant", "content": "", "tool_calls": [
-            {"function": {"name": "noop", "arguments": {}}}]}},
-        {"message": {"role": "assistant", "content": "", "tool_calls": [
-            {"function": {"name": "noop", "arguments": {}}}]}},
-    ])
-    monkeypatch.setattr(ob.httpx, "post",
-                        lambda url, json, timeout: http.post(url, json, timeout))
+    http = _FakeHttp(
+        [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "noop", "arguments": {}}}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "noop", "arguments": {}}}],
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(ob.httpx, "post", lambda url, json, timeout: http.post(url, json, timeout))
     sess = _FakeSession()
     sess.next_result = types.SimpleNamespace(content=[])
 
     class _Open:
-        def __init__(self): pass
-        async def __aenter__(self): return (object(), object())
-        async def __aexit__(self, *exc): return False
+        def __init__(self):
+            pass
 
-    async def _fake_open_mcp(): return _Open()
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def _fake_open_mcp():
+        return _Open()
+
     bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
     monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
 
@@ -219,16 +258,24 @@ async def test_ask_raises_when_model_keeps_calling_tools(monkeypatch):
 async def test_ask_returns_content_when_no_tool_calls(monkeypatch):
     cfg = ob.OllamaBridgeConfig(max_tool_iterations=4)
     bridge = ob.OllamaMCPBridge(cfg)
-    http = _FakeHttp([
-        {"message": {"role": "assistant", "content": "Straight answer."}},
-    ])
-    monkeypatch.setattr(ob.httpx, "post",
-                        lambda url, json, timeout: http.post(url, json, timeout))
+    http = _FakeHttp(
+        [
+            {"message": {"role": "assistant", "content": "Straight answer."}},
+        ]
+    )
+    monkeypatch.setattr(ob.httpx, "post", lambda url, json, timeout: http.post(url, json, timeout))
     sess = _FakeSession()
+
     class _Open:
-        async def __aenter__(self): return (object(), object())
-        async def __aexit__(self, *exc): return False
-    async def _fake_open_mcp(): return _Open()
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def _fake_open_mcp():
+        return _Open()
+
     bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
     monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
     out = await bridge.ask("any q", model="qwen3.6:27b")
@@ -245,22 +292,110 @@ async def test_ask_tool_failure_is_surfaced_not_raised(monkeypatch):
         async def call_tool(self, name, args):
             raise RuntimeError("kaboom")
 
-    http = _FakeHttp([
-        # First call to /api/chat: model decides to call tool (will fail)
-        {"message": {"role": "assistant", "content": "", "tool_calls": [
-            {"function": {"name": "boom", "arguments": {}}}]}},
-        # Second call: model sees the error envelope and answers
-        {"message": {"role": "assistant", "content": "Tool failed but I recovered."}},
-    ])
-    monkeypatch.setattr(ob.httpx, "post",
-                        lambda url, json, timeout: http.post(url, json, timeout))
+    http = _FakeHttp(
+        [
+            # First call to /api/chat: model decides to call tool (will fail)
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "boom", "arguments": {}}}],
+                }
+            },
+            # Second call: model sees the error envelope and answers
+            {"message": {"role": "assistant", "content": "Tool failed but I recovered."}},
+        ]
+    )
+    monkeypatch.setattr(ob.httpx, "post", lambda url, json, timeout: http.post(url, json, timeout))
     sess = _BoomSession()
+
     class _Open:
-        async def __aenter__(self): return (object(), object())
-        async def __aexit__(self, *exc): return False
-    async def _fake_open_mcp(): return _Open()
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def _fake_open_mcp():
+        return _Open()
+
     bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
     monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
 
     out = await bridge.ask("go", model="qwen3.6:27b")
     assert "recovered" in out
+
+
+# ---------------------------------------------------------------------------
+# _post_json httpx vs urllib fallback
+# ---------------------------------------------------------------------------
+
+
+def test_post_json_falls_back_to_urllib_when_httpx_missing(monkeypatch):
+    """Simulate a Python environment without httpx (e.g. system python3)
+    and confirm _post_json still works using urllib only."""
+    import threading
+    import json as _json
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: list[bytes] = []
+
+    class _H(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            return
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or "0")
+            received.append(self.rfile.read(length))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"message":{"role":"assistant","content":"ok"}}')
+
+    srv = HTTPServer(("127.0.0.1", 0), _H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(ob, "_HAS_HTTPX", False, raising=False)
+        out = ob._post_json(
+            f"http://127.0.0.1:{port}/api/chat",
+            {"model": "m", "messages": []},
+            timeout=2.0,
+        )
+        assert out["message"]["content"] == "ok"
+        # Verify the JSON body was actually sent.
+        body = _json.loads(received[0].decode("utf-8"))
+        assert body["model"] == "m"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_post_json_uses_httpx_when_available():
+    """When httpx is importable we should go down the httpx branch."""
+    assert ob._HAS_HTTPX is True
+    # Just exercise the code path with a tiny stub server to prove the
+    # branch is reachable — the urllib test above covers the other branch.
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _H(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            return
+
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or "0"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+    srv = HTTPServer(("127.0.0.1", 0), _H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        out = ob._post_json(f"http://127.0.0.1:{port}", {"x": 1}, timeout=2.0)
+        assert out == {"ok": True}
+    finally:
+        srv.shutdown()
+        srv.server_close()

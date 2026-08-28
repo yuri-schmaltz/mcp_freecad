@@ -12,6 +12,7 @@ Lives as a Qt dock inside the FreeCAD main window. Shows:
 The panel never blocks the FreeCAD main thread: ``subprocess.Popen`` is
 driven by ``QProcess`` so output is delivered via signals.
 """
+
 from __future__ import annotations
 
 import os
@@ -36,9 +37,9 @@ class _StatusLED(QtWidgets.QFrame):
     """Coloured circle with a label. Colour = server state."""
 
     COLOURS = {
-        "running": "#22c55e",   # green-500
-        "stopped": "#9ca3af",   # gray-400
-        "error": "#ef4444",     # red-500
+        "running": "#22c55e",  # green-500
+        "stopped": "#9ca3af",  # gray-400
+        "error": "#ef4444",  # red-500
         "starting": "#f59e0b",  # amber-500
     }
 
@@ -146,9 +147,7 @@ class MCPControlPanel(QtWidgets.QWidget):
         card.setFrameShape(QtWidgets.QFrame.StyledPanel)
         card.setObjectName("MCPCard")
         self._status_card = card
-        card.setStyleSheet(
-            "QFrame { background:#f3f4f6; border:1px solid #d1d5db; border-radius:6px; }"
-        )
+        card.setStyleSheet("QFrame { background:#f3f4f6; border:1px solid #d1d5db; border-radius:6px; }")
         card_layout = QtWidgets.QVBoxLayout(card)
         card_layout.setContentsMargins(8, 8, 8, 8)
         card_layout.setSpacing(6)
@@ -200,9 +199,7 @@ class MCPControlPanel(QtWidgets.QWidget):
         # model + working dir row
         meta_row = QtWidgets.QHBoxLayout()
         meta_row.addWidget(QtWidgets.QLabel("Modelo:"))
-        self.model_edit = QtWidgets.QLineEdit(
-            os.environ.get(self.PROMPT_HISTORY_ENV, "qwen3.6:27b")
-        )
+        self.model_edit = QtWidgets.QLineEdit(os.environ.get(self.PROMPT_HISTORY_ENV, "qwen3.6:27b"))
         meta_row.addWidget(self.model_edit, 1)
         meta_row.addSpacing(8)
         self.auto_dispatch = QtWidgets.QCheckBox("Auto-dispatch (enviar sem revisar)")
@@ -228,9 +225,7 @@ class MCPControlPanel(QtWidgets.QWidget):
             "font-family: 'DejaVu Sans Mono', monospace; font-size:11px; }"
         )
         self.log_view.setMinimumHeight(140)
-        self.log_view.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
-        )
+        self.log_view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         pc_layout.addWidget(self.log_view, 1)
 
         root.addWidget(prompt_card, 1)
@@ -253,7 +248,9 @@ class MCPControlPanel(QtWidgets.QWidget):
             return
         try:
             rendered = tpl.prompt.format(
-                doc_name="Untitled", doc_a="DocA", doc_b="DocB",
+                doc_name="Untitled",
+                doc_a="DocA",
+                doc_b="DocB",
             )
         except Exception:
             rendered = tpl.prompt
@@ -273,9 +270,7 @@ class MCPControlPanel(QtWidgets.QWidget):
                 mw = FreeCADGui.getMainWindow()
                 base_color = mw.palette().color(QtGui.QPalette.Window)
                 luminance = (
-                    0.2126 * base_color.red()
-                    + 0.7152 * base_color.green()
-                    + 0.0722 * base_color.blue()
+                    0.2126 * base_color.red() + 0.7152 * base_color.green() + 0.0722 * base_color.blue()
                 )
                 effective = "dark" if luminance < 128 else "light"
             except Exception:
@@ -396,35 +391,121 @@ class MCPControlPanel(QtWidgets.QWidget):
         Strategy:
         1. Prefer the local checkout venv (if present) so the user
            sees their dev code reflected immediately.
-        2. Fall back to the system ``python -m freecad_mcp.ollama_bridge``.
-        3. Fall back to ``uvx mcp-freecad`` if available.
+        2. If a repo root is known, prepend ``src/`` to ``PYTHONPATH``
+           so the system python can import ``freecad_mcp`` without pip.
+        3. Fall back to the system ``python -m freecad_mcp.ollama_bridge``.
+        4. Fall back to ``uvx mcp-freecad`` if available.
+
+        The repo root is resolved (in order) from:
+        * ``$FREECAD_MCP_REPO_ROOT`` env var
+        * ``~/.config/freecad-mcp/repo-root`` plain-text file
+          (one absolute path per line; first non-empty, non-comment wins)
+        * Auto-detect: walk up from this module looking for ``pyproject.toml``
+          (works for dev checkouts, not for Flatpak installs).
         """
         cwd = os.getcwd() if QtWidgets else "."
-        repo_root = os.environ.get("FREECAD_MCP_REPO_ROOT")
+        repo_root = self._resolve_repo_root()
 
-        # 1) local dev checkout
+        # 1) local dev checkout venv
         if repo_root and os.path.isdir(os.path.join(repo_root, ".venv")):
             py = os.path.join(repo_root, ".venv", "bin", "python")
             if os.path.isfile(py):
                 return [py, "-m", "freecad_mcp.ollama_bridge", prompt, "--model", model], repo_root
 
-        # 2) system python with the package installed
+        # 2) repo with src/ layout (use PYTHONPATH so we don't need pip install)
+        if repo_root and os.path.isfile(os.path.join(repo_root, "pyproject.toml")):
+            src_dir = os.path.join(repo_root, "src")
+            if os.path.isdir(src_dir):
+                for py in (shutil.which("python3"), shutil.which("python")):
+                    if not py:
+                        continue
+                    env_prefix = f"PYTHONPATH={shlex.quote(src_dir)}"
+                    return [
+                        "env",
+                        env_prefix,
+                        py,
+                        "-m",
+                        "freecad_mcp.ollama_bridge",
+                        prompt,
+                        "--model",
+                        model,
+                    ], repo_root
+
+        # 3) system python with the package installed
         for py in (shutil.which("python3"), shutil.which("python")):
             if not py:
                 continue
             return [py, "-m", "freecad_mcp.ollama_bridge", prompt, "--model", model], cwd
 
-        # 3) uvx fallback (PyPI install)
+        # 4) uvx fallback (PyPI install)
         uvx = shutil.which("uvx")
         if uvx:
-            return [uvx, "--from", "mcp-freecad", "python", "-m",
-                    "freecad_mcp.ollama_bridge", prompt, "--model", model], cwd
+            return [
+                uvx,
+                "--from",
+                "mcp-freecad",
+                "python",
+                "-m",
+                "freecad_mcp.ollama_bridge",
+                prompt,
+                "--model",
+                model,
+            ], cwd
 
         self._append_log(
             "[mcp] ERRO: não encontrei python nem uvx no PATH. "
-            "Instale `uvx` ou rode `pip install -e .[dev]` no repo.\n"
+            "Defina FREECAD_MCP_REPO_ROOT=/caminho/do/repo ou crie "
+            "~/.config/freecad-mcp/repo-root com o caminho absoluto do repo.\n"
         )
         return None, None
+
+    def _resolve_repo_root(self) -> str | None:
+        """Return the absolute path to the ``mcp_freecad`` source repo, if known.
+
+        Order of resolution:
+        1. ``$FREECAD_MCP_REPO_ROOT`` environment variable.
+        2. ``~/.config/freecad-mcp/repo-root`` plain-text file.
+        3. Walk up from this module looking for a sibling ``pyproject.toml``.
+        """
+        cached = getattr(self, "_cached_repo_root", "_unset")
+        if cached != "_unset":
+            return cached or None
+
+        # 1) env var
+        env = os.environ.get("FREECAD_MCP_REPO_ROOT", "").strip()
+        if env and os.path.isfile(os.path.join(env, "pyproject.toml")):
+            self._cached_repo_root = env
+            return env
+
+        # 2) config file (one-line plaintext)
+        cfg = os.path.expanduser("~/.config/freecad-mcp/repo-root")
+        if os.path.isfile(cfg):
+            try:
+                with open(cfg, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if os.path.isfile(os.path.join(line, "pyproject.toml")):
+                            self._cached_repo_root = line
+                            return line
+            except OSError:
+                pass
+
+        # 3) auto-detect (dev checkout: addon sits next to repo root)
+        here = os.path.dirname(os.path.abspath(__file__))
+        cur = here
+        for _ in range(6):
+            if os.path.isfile(os.path.join(cur, "pyproject.toml")):
+                self._cached_repo_root = cur
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+        self._cached_repo_root = ""
+        return None
 
     def _on_process_finished(self, code: int, status: QtCore.QProcess.ExitStatus) -> None:
         self._append_log(f"[mcp] processo terminou (code={code}, status={status}).\n")
@@ -449,8 +530,8 @@ _BTN_BASE = (
     "QPushButton:hover { filter:brightness(1.1); }"
     "QPushButton:pressed { padding-top:5px; padding-bottom:3px; }"
 )
-_BTN_START = _BTN_BASE + "QPushButton { background:#16a34a; }"   # green
-_BTN_STOP = _BTN_BASE + "QPushButton { background:#dc2626; }"    # red
+_BTN_START = _BTN_BASE + "QPushButton { background:#16a34a; }"  # green
+_BTN_STOP = _BTN_BASE + "QPushButton { background:#dc2626; }"  # red
 
 
 # ----- Public helpers ---------------------------------------------------------

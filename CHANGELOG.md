@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.8] — 2026-08-28
+
+### Fixed — Ollama 4xx no longer hard-fails the dispatch
+
+Two complementary hardening changes that make the dock panel's
+Ollama dispatch *robust* against transient shape mismatches between
+the FastMCP-emitted tool specs and whatever Ollama build the user
+happens to run:
+
+- **Diagnostic dump, hardened** — `_post_json` now writes
+  `/tmp/freecad-mcp/last_request_body.json` **before every**
+  upstream call, so even a successful dispatch leaves a forensic
+  snapshot. On 4xx, the same helper that wrote the body also
+  dumps the failing request + Ollama response to
+  `/tmp/freecad-mcp/ollama_400_<unix_ts>.json`. The 4xx branch
+  defensively wraps `e.response.status_code` /
+  `e.response.text` in try/except so the dump never gets bypassed
+  by an unexpected httpx edge case (e.g. `e.response` being `None`).
+- **Automatic fallback to no-tools retry** — when `_post_json`
+  raises on the *first* call with `tools`, the bridge retries the
+  same request with the `tools` field stripped. The model still
+  answers (text-only), the user gets a usable response, and the
+  diagnostic dump captures the failing body for root-cause
+  analysis. The fallback only fires when the request body
+  originally had `tools` — a 4xx that happens after a tool result
+  was already attached still propagates so real errors aren't
+  hidden.
+
+### Added — tests
+
+- 3 new tests in `tests/test_ollama_no_tools_fallback.py`:
+  - `test_fallback_returns_no_tools_response_when_400` — verify
+    the retry path.
+  - `test_post_json_dumps_body_even_when_call_raises` — verify the
+    last_request_body.json dump happens even on 4xx.
+  - `test_send_retries_without_tools_on_400` — verify the
+    bridge-level retry strips `tools` and returns the second
+    call's response.
+
+### Verified
+
+- 971 pytest tests pass (3 new + previous 968), ruff + mypy clean.
+- Headless smoke gauntlet inside the Flatpak sandbox completes the
+  full bridge roundtrip without 4xx.
+
 ## [1.1.7] — 2026-08-28
 
 ### Fixed — Ollama 400 Bad Request on tool-call loop

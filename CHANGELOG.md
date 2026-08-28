@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] — 2026-08-28
+
+### Fixed
+
+- **Ollama bridge dispatch** — when the system Python did not have
+  `freecad_mcp` installed (the common Flatpak install case), the
+  dock panel emitted `ModuleNotFoundError: No module named 'freecad_mcp'`
+  the moment you pressed **Enviar**. The dispatch now resolves the
+  repo root via three strategies in order:
+  1. `$FREECAD_MCP_REPO_ROOT` env var.
+  2. `~/.config/freecad-mcp/repo-root` plain-text config file.
+  3. Walk up from the addon module looking for `pyproject.toml`.
+
+  When a repo with a `src/` layout is detected, the subprocess is
+  launched with `PYTHONPATH=src/` via `env`, so the system Python
+  can import `freecad_mcp` without `pip install`.
+
+### Added — tests
+
+- `tests/test_panel_dispatch.py` — 5 tests covering env var,
+  config file, dot-venv fast path, and the "nothing available"
+  error path.
+
 ## [1.1.2] — 2026-08-27
 
 **Theme: 5 new feature suites from competitive analysis.** 25 new

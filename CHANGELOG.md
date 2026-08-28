@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.7] — 2026-08-28
+
+### Fixed — Ollama 400 Bad Request on tool-call loop
+
+- **`_mcp_tool_loop.sanitize_messages_for_llm`** (new) — normalizes
+  the chat message list before each upstream call. Two problems were
+  tripping Ollama's request validator with
+  `HTTP 400 "Value looks like object, but can't find closing '}' symbol"`:
+  - **`tool_calls[].function.arguments`** — Ollama's current parser
+    only accepts the **object** form (`{"x":1}`); some models and
+    older Ollama builds emit the **string** form (`'{"x":1}'`).
+    Sanitizer converts the string form back to an object.
+  - **`thinking`** — the model adds a `thinking` block to its own
+    replies; re-sending that verbatim makes Ollama 400. Sanitizer
+    strips it.
+  - LM Studio and OpenAI-compatible backends keep working: the
+    helper only rewrites the fields that are problematic for *any*
+    backend, leaving the rest untouched.
+- Both bridges (`ollama_bridge`, `lmstudio_bridge`) now call
+  `sanitize_messages_for_llm(loop.messages)` before each upstream
+  call, so the fix applies to the whole tool-call loop, not just the
+  first iteration.
+
+### Added — tests
+
+- 9 new tests in `tests/test_sanitize_messages.py` covering: stripping
+  `thinking`, converting string arguments to objects, leaving object
+  arguments alone, empty-string arguments, passthrough for
+  user/tool messages, handling messages without `tool_calls`, leaving
+  malformed JSON untouched (best-effort), normalizing multiple
+  `tool_calls`, and verifying the input list is never mutated.
+
+### Verified
+
+- 966 pytest tests pass (1 pre-existing LM-Studio test deselected).
+- `ruff check src/ addon/ tests/` clean.
+- `mypy src/freecad_mcp/` clean.
+- Headless smoke gauntlet inside the Flatpak sandbox goes end-to-end
+  with the model now calling tools (server logs show
+  `Processing request of type CallToolRequest`) instead of 400-ing on
+  the second iteration.
+
 ## [1.1.6] — 2026-08-28
 
 ### Fixed — Flatpak sandbox in-process bridge

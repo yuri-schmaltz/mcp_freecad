@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - exercised when httpx is absent
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ._mcp_tool_loop import _result_to_text, mcp_tool_to_openai, run_tool_loop
+from ._mcp_tool_loop import _result_to_text, mcp_tool_to_openai, run_tool_loop, sanitize_messages_for_llm
 from .circuit_breaker import CircuitBreaker
 
 # Back-compat aliases kept so older callers still work.
@@ -101,7 +101,11 @@ class OllamaMCPBridge:
 
             async def _send(loop) -> None:
                 body = dict(payload)
-                body["messages"] = loop.messages
+                # Strip ``thinking`` blocks and convert any
+                # string-form ``tool_calls[].function.arguments`` back to
+                # objects — Ollama's request validator rejects the
+                # string form with a confusing 400.
+                body["messages"] = sanitize_messages_for_llm(loop.messages)
                 if tools:
                     body["tools"] = tools
 

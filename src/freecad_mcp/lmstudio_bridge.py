@@ -41,7 +41,7 @@ import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ._mcp_tool_loop import mcp_tool_to_openai, run_tool_loop
+from ._mcp_tool_loop import mcp_tool_to_openai, run_tool_loop, sanitize_messages_for_llm
 from .circuit_breaker import CircuitBreaker
 
 
@@ -88,7 +88,7 @@ class LMStudioMCPBridge:
 
             async def _send(loop) -> None:
                 body = dict(payload)
-                body["messages"] = loop.messages
+                body["messages"] = sanitize_messages_for_llm(loop.messages)
 
                 def _do() -> dict[str, Any]:
                     r = httpx.post(f"{cfg.base_url}/v1/chat/completions",

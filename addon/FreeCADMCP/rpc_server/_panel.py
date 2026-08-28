@@ -114,6 +114,7 @@ class MCPControlPanel(QtWidgets.QWidget):
     PROMPT_HISTORY_ENV = "FREECAD_MCP_OLLAMA_MODEL"
     THEME_ENV = "FREECAD_MCP_PANEL_THEME"
     OLLAMA_HOST_ENV = "OLLAMA_HOST"
+    VENV_PATH_ENV = "FREECAD_MCP_VENV"
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
@@ -399,6 +400,19 @@ class MCPControlPanel(QtWidgets.QWidget):
         else:
             os.environ["OLLAMA_HOST"] = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 
+        # Sandbox detection: if we're inside a Flatpak/Snap, the host
+        # Python isn't reachable, and spawning it would either fail or
+        # produce a confusing ModuleNotFoundError. Instead, fall back to
+        # in-process execution via a QThread (the FreeCAD app is already
+        # running, the sandbox has the right interpreter, and the user
+        # can install mcp+freecad_mcp via flatpak enter / pip).
+        if self._is_sandboxed():
+            self._append_log(
+                "[mcp] sandbox detectado — rodando ollama_bridge in-process.\n"
+            )
+            self._start_in_process(prompt, model)
+            return
+
         argv, cwd = self._build_dispatch_argv(prompt, model)
         if argv is None:
             return
@@ -408,6 +422,7 @@ class MCPControlPanel(QtWidgets.QWidget):
 
         proc = QtCore.QProcess(self)
         proc.setProcessChannelMode(QtCore.QProcess.MergedChannels)
+        proc.readyReadStandardStandardOutput = proc.readyReadStandardOutput  # noqa
         proc.readyReadStandardOutput.connect(
             lambda: self._append_log(bytes(proc.readAllStandardOutput()).decode("utf-8", "replace"))
         )
@@ -415,8 +430,63 @@ class MCPControlPanel(QtWidgets.QWidget):
         proc.errorOccurred.connect(self._on_process_error)
         if cwd:
             proc.setWorkingDirectory(cwd)
+
+        env = self._build_subprocess_env(argv)
+        proc.setProcessEnvironment(env)
         self._process = proc
         proc.start(argv[0], argv[1:])
+
+    @staticmethod
+    def _is_sandboxed() -> bool:
+        """Best-effort detection of running inside Flatpak/Snap/AppImage.
+
+        These environments hide the host filesystem (``/usr/bin/python3``
+        doesn't resolve to an executable that can run), so we must use
+        the in-process interpreter instead of spawning the host python.
+        """
+        if os.path.exists("/.flatpak-info"):
+            return True
+        if os.environ.get("SNAP_NAME"):
+            return True
+        return bool(os.environ.get("APPIMAGE"))  # noqa: SIM103
+
+    def _start_in_process(self, prompt: str, model: str) -> None:
+        """Run the Ollama bridge inside this FreeCAD process via QThread.
+
+        We reuse the already-imported interpreter (which has FreeCAD
+        available) and rely on the user having installed ``mcp`` +
+        ``freecad_mcp`` in the sandbox Python's ``sys.path``. If they
+        haven't, the bridge fails fast with a clear error message
+        pointing at the install command.
+        """
+        try:
+            from ._in_process_bridge import run_bridge_in_thread
+        except Exception as e:
+            self._append_log(
+                f"[mcp] bridge in-process não disponível: {e!r}\n"
+            )
+            return
+
+        try:
+            worker = run_bridge_in_thread(
+                prompt=prompt,
+                model=model,
+                on_log=lambda m: self._append_log(m),
+                on_done=lambda ans, err: self._on_in_process_done(ans, err),
+            )
+            self._process = worker  # type: ignore[assignment]
+        except Exception as e:
+            self._append_log(
+                f"[mcp] falha ao iniciar bridge in-process: {e!r}\n"
+            )
+
+    def _on_in_process_done(self, answer: str, error: str | None) -> None:
+        if error:
+            self._append_log(f"[mcp] bridge error: {error}\n")
+        if answer:
+            self._append_log(f"\n[mcp] resposta:\n{answer}\n")
+        self._process = None
+        self._refresh_status()
 
     def _build_dispatch_argv(self, prompt: str, model: str) -> tuple[list[str] | None, str | None]:
         """Return (argv, cwd) ready for ``QProcess.start``.
@@ -438,12 +508,11 @@ class MCPControlPanel(QtWidgets.QWidget):
         """
         cwd = os.getcwd() if QtWidgets else "."
         repo_root = self._resolve_repo_root()
+        venv_py = self._find_venv_python(repo_root)
 
-        # 1) local dev checkout venv
-        if repo_root and os.path.isdir(os.path.join(repo_root, ".venv")):
-            py = os.path.join(repo_root, ".venv", "bin", "python")
-            if os.path.isfile(py):
-                return [py, "-m", "freecad_mcp.ollama_bridge", prompt, "--model", model], repo_root
+        # 1) venv python (most reliable: has mcp + freecad_mcp installed)
+        if venv_py:
+            return [venv_py, "-m", "freecad_mcp.ollama_bridge", prompt, "--model", model], repo_root or cwd
 
         # 2) repo with src/ layout (use PYTHONPATH so we don't need pip install)
         if repo_root and os.path.isfile(os.path.join(repo_root, "pyproject.toml")):
@@ -487,10 +556,49 @@ class MCPControlPanel(QtWidgets.QWidget):
 
         self._append_log(
             "[mcp] ERRO: não encontrei python nem uvx no PATH. "
-            "Defina FREECAD_MCP_REPO_ROOT=/caminho/do/repo ou crie "
-            "~/.config/freecad-mcp/repo-root com o caminho absoluto do repo.\n"
+            "Defina FREECAD_MCP_VENV=/caminho/do/venv/bin/python ou "
+            "FREECAD_MCP_REPO_ROOT=/caminho/do/repo.\n"
         )
         return None, None
+
+    def _find_venv_python(self, repo_root: str | None) -> str | None:
+        """Return an absolute path to a Python that has mcp-freecad installed.
+
+        Tries, in order:
+        1. ``$FREECAD_MCP_VENV`` env var (any python inside that venv).
+        2. ``<repo_root>/.venv/bin/python`` (dev checkout).
+        3. ``/tmp/.venv-rpctest/bin/python`` (this repo's CI venv).
+        4. ``~/.local/share/uv/tools/mcp-freecad/bin/python`` (uv tool install).
+        """
+        # Use ``in self.__dict__`` rather than a sentinel compare so we
+        # are robust to Qt subclasses that may define ``__getattr__``.
+        if "_cached_venv_python" in self.__dict__:
+            cached = self.__dict__["_cached_venv_python"]
+            return cached or None
+
+        candidates: list[str] = []
+
+        env_venv = os.environ.get(self.VENV_PATH_ENV, "").strip()
+        if env_venv:
+            if os.path.isfile(env_venv):
+                candidates.append(env_venv)
+            elif os.path.isdir(env_venv):
+                candidates.append(os.path.join(env_venv, "bin", "python"))
+                candidates.append(os.path.join(env_venv, "Scripts", "python.exe"))
+
+        if repo_root:
+            candidates.append(os.path.join(repo_root, ".venv", "bin", "python"))
+
+        candidates.append("/tmp/.venv-rpctest/bin/python")
+        candidates.append(os.path.expanduser("~/.local/share/uv/tools/mcp-freecad/bin/python"))
+
+        for cand in candidates:
+            if os.path.isfile(cand):
+                self._cached_venv_python = cand
+                return cand
+
+        self._cached_venv_python = ""
+        return None
 
     def _resolve_repo_root(self) -> str | None:
         """Return the absolute path to the ``mcp_freecad`` source repo, if known.
@@ -500,8 +608,10 @@ class MCPControlPanel(QtWidgets.QWidget):
         2. ``~/.config/freecad-mcp/repo-root`` plain-text file.
         3. Walk up from this module looking for a sibling ``pyproject.toml``.
         """
-        cached = getattr(self, "_cached_repo_root", "_unset")
-        if cached != "_unset":
+        # Use ``in self.__dict__`` rather than a sentinel compare so we
+        # are robust to Qt subclasses that may define ``__getattr__``.
+        if "_cached_repo_root" in self.__dict__:
+            cached = self.__dict__["_cached_repo_root"]
             return cached or None
 
         # 1) env var
@@ -550,6 +660,41 @@ class MCPControlPanel(QtWidgets.QWidget):
         self._process = None
 
     # ----- Ollama model picker ----------------------------------------------
+
+    def _build_subprocess_env(self, argv: list[str]) -> QtCore.QProcessEnvironment:
+        """Return a QProcessEnvironment tailored to the chosen interpreter.
+
+        In particular, we want the same ``venv/bin/`` directory that
+        owns ``argv[0]`` to appear in ``PATH`` so the bridge can find
+        the ``mcp-freecad`` console script without the user having to
+        install it globally.
+        """
+        env = QtCore.QProcessEnvironment.systemEnvironment()
+
+        # Inherit / override OLLAMA_HOST from the field.
+        host = self.ollama_host_edit.text().strip()
+        if host:
+            env.insert(self.OLLAMA_HOST_ENV, host)
+
+        # Make sure the venv bin directory is on PATH.
+        interp = argv[0] if argv else ""
+        if interp and ("/" in interp or os.sep in interp):
+            venv_bin = os.path.dirname(interp)
+            current_path = env.value("PATH", "") or ""
+            if venv_bin and venv_bin not in current_path.split(os.pathsep):
+                env.insert("PATH", venv_bin + os.pathsep + current_path)
+
+        # Belt-and-braces: also prepend repo src/ to PYTHONPATH so the
+        # fallback path keeps working when the venv python is missing.
+        repo_root = self._resolve_repo_root()
+        if repo_root:
+            src_dir = os.path.join(repo_root, "src")
+            if os.path.isdir(src_dir):
+                current_pp = env.value("PYTHONPATH", "") or ""
+                if src_dir not in current_pp.split(os.pathsep):
+                    env.insert("PYTHONPATH", src_dir + os.pathsep + current_pp)
+
+        return env
 
     def _on_refresh_models(self) -> None:
         """Hit ``/api/tags`` and repopulate the model combobox."""

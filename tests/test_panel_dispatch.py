@@ -138,17 +138,63 @@ class ResolveRepoRootTests(_TestPanel):
                         self.assertEqual(result, repo)
 
 
+class FindVenvPythonTests(_TestPanel):
+    """Tests for ``_find_venv_python`` resolution chain."""
+
+    def test_env_var_wins_when_path_points_at_python(self) -> None:
+        with tempfile.TemporaryDirectory() as venv:
+            py = os.path.join(venv, "bin", "python")
+            os.makedirs(os.path.dirname(py), exist_ok=True)
+            open(py, "w").close()
+            with mock.patch.dict(os.environ, {"FREECAD_MCP_VENV": py}):
+                p = self._new()
+                self.assertEqual(p._find_venv_python(None), py)
+
+    def test_env_var_wins_when_path_points_at_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as venv:
+            bin_dir = os.path.join(venv, "bin")
+            os.makedirs(bin_dir, exist_ok=True)
+            py = os.path.join(bin_dir, "python")
+            open(py, "w").close()
+            with mock.patch.dict(os.environ, {"FREECAD_MCP_VENV": venv}):
+                p = self._new()
+                self.assertEqual(p._find_venv_python(None), py)
+
+    def test_repo_dot_venv_used_when_env_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as repo:
+            venv_bin = os.path.join(repo, ".venv", "bin")
+            os.makedirs(venv_bin, exist_ok=True)
+            py = os.path.join(venv_bin, "python")
+            open(py, "w").close()
+            env_no_venv = {k: v for k, v in os.environ.items() if k != "FREECAD_MCP_VENV"}
+            with mock.patch.dict(os.environ, env_no_venv, clear=True):
+                p = self._new()
+                self.assertEqual(p._find_venv_python(repo), py)
+
+    def test_returns_none_when_nothing_found(self) -> None:
+        env_clean = {k: v for k, v in os.environ.items() if k != "FREECAD_MCP_VENV"}
+        with mock.patch.dict(os.environ, env_clean, clear=True):
+            p = self._new()
+            # /tmp/.venv-rpctest/bin/python may exist on this host, so the
+            # function might return it. Use a private tmp dir override.
+            with mock.patch("os.path.isfile", return_value=False):
+                self.assertIsNone(p._find_venv_python(None))
+
+
 class BuildDispatchArgvTests(_TestPanel):
     def test_returns_none_with_clear_error_when_nothing_available(self) -> None:
-        # Force every fallback to fail by clearing PATH-like helpers.
-        with mock.patch("shutil.which", return_value=None):
-            with mock.patch.object(self.cls, "_resolve_repo_root", return_value=None):
-                p = self._new()
-                # Patch _append_log to swallow noise.
-                p._append_log = lambda msg: None  # type: ignore[assignment]
-                argv, cwd = p._build_dispatch_argv("hello", "qwen3:27b")
-                self.assertIsNone(argv)
-                self.assertIsNone(cwd)
+        # Force every fallback to fail by clearing PATH-like helpers
+        # AND making sure no real venv python is discoverable on this host.
+        with (
+            mock.patch("shutil.which", return_value=None),
+            mock.patch.object(self.cls, "_find_venv_python", return_value=None),
+            mock.patch.object(self.cls, "_resolve_repo_root", return_value=None),
+        ):
+            p = self._new()
+            p._append_log = lambda msg: None  # type: ignore[assignment]
+            argv, cwd = p._build_dispatch_argv("hello", "qwen3:27b")
+            self.assertIsNone(argv)
+            self.assertIsNone(cwd)
 
     def test_uses_venv_python_when_repo_root_has_dotvenv(self) -> None:
         with tempfile.TemporaryDirectory() as repo:
@@ -158,13 +204,28 @@ class BuildDispatchArgvTests(_TestPanel):
             py = os.path.join(venv_bin, "python")
             open(py, "w").close()
             open(os.path.join(repo, "pyproject.toml"), "w").close()
-            with mock.patch.object(self.cls, "_resolve_repo_root", return_value=repo):
+            with (
+                mock.patch.object(self.cls, "_find_venv_python", return_value=py),
+                mock.patch.object(self.cls, "_resolve_repo_root", return_value=repo),
+            ):
                 p = self._new()
                 argv, cwd = p._build_dispatch_argv("hi", "m")
                 self.assertIsNotNone(argv)
                 self.assertEqual(argv[0], py)
                 self.assertEqual(argv[1:], ["-m", "freecad_mcp.ollama_bridge", "hi", "--model", "m"])
                 self.assertEqual(cwd, repo)
+
+    def test_falls_back_to_system_python_when_no_venv(self) -> None:
+        """When no venv is found and we have no repo, system python wins."""
+        with (
+            mock.patch.object(self.cls, "_find_venv_python", return_value=None),
+            mock.patch.object(self.cls, "_resolve_repo_root", return_value=None),
+            mock.patch("shutil.which", return_value="/usr/bin/python3"),
+        ):
+            p = self._new()
+            p._append_log = lambda msg: None  # type: ignore[assignment]
+            argv, cwd = p._build_dispatch_argv("hi", "m")
+            self.assertEqual(argv[0], "/usr/bin/python3")
 
 
 if __name__ == "__main__":

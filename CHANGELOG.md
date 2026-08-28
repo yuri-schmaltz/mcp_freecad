@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.6] — 2026-08-28
+
+### Fixed — Flatpak sandbox in-process bridge
+
+- **`_in_process_bridge.py`** (new) — runs the Ollama → MCP bridge
+  inside the FreeCAD process when the dock panel detects a sandbox
+  (`/.flatpak-info`, `SNAP_NAME`, or `APPIMAGE`). This avoids the
+  previous "spawn host python" path that failed because the
+  Flatpak-bundled host `python3` symlinks to a path the Flatpak
+  cannot `X_OK`. The bridge reuses `/usr/bin/python3.13` (the
+  real interpreter inside the sandbox) and patches
+  `mcp.client.stdio._create_platform_compatible_process` so the
+  subprocess's `stderr` is a real file (the FreeCAD GUI's
+  `sys.stderr` is a QTextEdit adapter with no `fileno()`).
+- **`freecad_mcp/__main__.py`** (new) — entry point for
+  `python -m freecad_mcp`, forwards to `freecad_mcp.server.main`.
+  This is what the in-process bridge spawns (previously it spawned
+  `python -m freecad_mcp.server`, which only imports the module and
+  exits, leaving the stdio transport with no server listening —
+  the root cause of the `McpError: Connection closed` log in 1.1.5).
+- **`_panel.py`** — added `_is_sandboxed()`, `_start_in_process()`,
+  `_build_subprocess_env()`, and `_find_venv_python()` methods. The
+  panel now picks between the subprocess (host dev) and in-process
+  (sandbox) execution paths automatically. The fallback for
+  `_resolve_repo_root` was rewritten to use `in self.__dict__` so it
+  is robust to Qt subclasses that may define `__getattr__`.
+- **Forwarding `PYTHONPATH` to the MCP subprocess** so the in-process
+  bridge can locate `mcp` + `freecad_mcp` inside the Flatpak sandbox
+  without requiring a system-wide `pip install`.
+
+### Verified
+
+- Headless smoke gauntlet (`/tmp/fc-headless/headless_smoke.py`)
+  inside the Flatpak sandbox goes end-to-end:
+  workbench activated → RPC server up → panel obtained → sandbox
+  detected → in-process bridge starts → MCP session initialized
+  (`Processing request of type ListToolsRequest`) → Ollama answers
+  with tool-aware guidance.
+- 957 pytest tests pass (1 pre-existing LM-Studio test deselected).
+- `ruff check src/ addon/ tests/` clean.
+- `mypy src/freecad_mcp/` clean.
+
 ## [1.1.5] — 2026-08-28
 
 ### Fixed

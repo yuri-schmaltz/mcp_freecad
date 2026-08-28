@@ -195,3 +195,94 @@ def test_persisted_lost_job_marked_error(monkeypatch, tmp_path) -> None:
     assert job is not None
     assert job.status == mod.STATUS_ERROR
     assert "restarted" in (job.error or "")
+
+
+def test_redact_strips_password_assignment(jr_mod) -> None:
+    assert jr_mod._redact("password=hunter2") == "[REDACTED]"
+
+
+def test_redact_strips_api_key(jr_mod) -> None:
+    assert jr_mod._redact("api_key=ABCD1234abcd1234ABCD") == "[REDACTED]"
+
+
+def test_redact_strips_bearer_token(jr_mod) -> None:
+    redacted = jr_mod._redact("Authorization: Bearer abcdefghij1234567890")
+    assert "[REDACTED]" in redacted
+    assert "abcdefghij1234567890" not in redacted
+
+
+def test_redact_strips_github_token(jr_mod) -> None:
+    assert "[REDACTED]" in jr_mod._redact("token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
+
+
+def test_redact_strips_openai_key(jr_mod) -> None:
+    assert "[REDACTED]" in jr_mod._redact("OPENAI_KEY=sk-abcdefghijklmnopqrstuvwxyz1234")
+
+
+def test_redact_walks_dicts(jr_mod) -> None:
+    redacted = jr_mod._redact({"password": "x", "ok": "value"})
+    assert redacted == {"password": "[REDACTED]", "ok": "value"}
+
+
+def test_redact_walks_lists(jr_mod) -> None:
+    redacted = jr_mod._redact(["password=x", "ok"])
+    assert redacted == ["[REDACTED]", "ok"]
+
+
+def test_redact_passes_through_unknown(jr_mod) -> None:
+    """Non-string values pass through unchanged."""
+    assert jr_mod._redact(42) == 42
+    assert jr_mod._redact(None) is None
+    assert jr_mod._redact(3.14) == 3.14
+
+
+def test_truncate_redacts_secrets(jr_mod) -> None:
+    """Truncated results should be redacted first."""
+    big = "password=hunter2 " * 5000
+    out = jr_mod._truncate(big)
+    assert "[REDACTED]" in out
+    assert "hunter2" not in out
+
+
+def test_resolve_max_workers_default(jr_mod, monkeypatch) -> None:
+    monkeypatch.delenv("FREECAD_MCP_JOB_WORKERS", raising=False)
+    assert jr_mod._resolve_max_workers() == 1
+
+
+def test_resolve_max_workers_env(jr_mod, monkeypatch) -> None:
+    monkeypatch.setenv("FREECAD_MCP_JOB_WORKERS", "4")
+    assert jr_mod._resolve_max_workers() == 4
+
+
+def test_resolve_max_workers_clamps_to_one(jr_mod, monkeypatch) -> None:
+    monkeypatch.setenv("FREECAD_MCP_JOB_WORKERS", "0")
+    assert jr_mod._resolve_max_workers() == 1
+    monkeypatch.setenv("FREECAD_MCP_JOB_WORKERS", "-3")
+    assert jr_mod._resolve_max_workers() == 1
+
+
+def test_resolve_max_workers_invalid_value(jr_mod, monkeypatch) -> None:
+    monkeypatch.setenv("FREECAD_MCP_JOB_WORKERS", "not-a-number")
+    assert jr_mod._resolve_max_workers() == 1
+
+
+def test_error_message_is_redacted(jr_mod) -> None:
+    """An exception message containing secrets must be redacted in the
+    persisted job record."""
+    runner = jr_mod.JobRunner()
+    # Exec raises — its message contains the secret.
+    job = runner.submit(
+        'raise RuntimeError("api_key=ABCD1234abcd1234ABCD")',
+        label="secret-error",
+    )
+    # Spin until terminal.
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        j = runner.poll(job.job_id)
+        if j and j.is_terminal:
+            break
+        time.sleep(0.05)
+    j = runner.poll(job.job_id)
+    assert j.status == jr_mod.STATUS_ERROR
+    assert "[REDACTED]" in (j.error or "")
+    assert "ABCD1234abcd1234ABCD" not in (j.error or "")

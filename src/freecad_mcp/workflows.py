@@ -460,7 +460,7 @@ class WorkflowRegistry:
         out: builtins.list[dict[str, Any]] = []
         for combo in combinations:
             variant_args: dict[str, Any] = dict(initial_args or {})
-            variant_args.update(dict(zip(keys, combo)))
+            variant_args.update(dict(zip(keys, combo, strict=True)))
             try:
                 steps = self.run(
                     name,
@@ -471,7 +471,7 @@ class WorkflowRegistry:
                 success = all(s.get("success", False) for s in steps)
                 out.append(
                     {
-                        "combination": dict(zip(keys, combo)),
+                        "combination": dict(zip(keys, combo, strict=True)),
                         "results": steps,
                         "success": success,
                     }
@@ -479,7 +479,7 @@ class WorkflowRegistry:
             except WorkflowError as e:
                 out.append(
                     {
-                        "combination": dict(zip(keys, combo)),
+                        "combination": dict(zip(keys, combo, strict=True)),
                         "results": [{"error": str(e)}],
                         "success": False,
                     }

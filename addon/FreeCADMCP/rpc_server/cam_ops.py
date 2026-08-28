@@ -47,7 +47,7 @@ def _ensure_path() -> bool:
     return FreeCAD is not None and Path is not None
 
 
-def _get_doc(doc_name: str):
+def _get_doc(doc_name: str) -> Any:
     if FreeCAD is None:
         return None
     return FreeCAD.getDocument(doc_name)

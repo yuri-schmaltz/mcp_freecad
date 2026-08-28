@@ -80,6 +80,28 @@ def test_api_search_limit(ai_mod) -> None:
     assert len(hits) <= 3
 
 
+def test_api_search_regex_timeout_falls_back(ai_mod) -> None:
+    """A pathological regex must not wedge the server.
+
+    The probe at compile time is bounded by ``regex_timeout_seconds``;
+    when it expires the pattern is dropped and the search falls back
+    to plain substring matching.
+    """
+    # The classic catastrophic-backtracking pattern.
+    pathological = "/" + "(a+)+$" + "/"
+    hits = ai_mod.api_search(pathological, {"math": math}, regex_timeout_seconds=0.05)
+    # We don't care which path the search took as long as it returned
+    # *something* and the call completed.
+    assert isinstance(hits, list)
+
+
+def test_api_search_regex_invalid_syntax(ai_mod) -> None:
+    """An invalid regex must be silently dropped, not raise."""
+    hits = ai_mod.api_search("/[/", {"math": math})
+    # Falls back to substring search — ``/[/`` doesn't match any name.
+    assert hits == []
+
+
 def test_default_modules_contains_math() -> None:
     import importlib
     spec = importlib.util.spec_from_file_location(

@@ -29,6 +29,7 @@ Limitations
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import re
 from pathlib import Path
@@ -76,7 +77,7 @@ def _parse_node_block(lines: list[str], idx: int) -> tuple[list[dict[str, Any]],
         # Node line: " 1C  N  x  y  z"
         m = re.match(r"^\s*\d+C\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)", line)
         if m:
-            try:
+            with contextlib.suppress(ValueError):
                 nodes.append(
                     {
                         "id": int(m.group(1)),
@@ -85,8 +86,6 @@ def _parse_node_block(lines: list[str], idx: int) -> tuple[list[dict[str, Any]],
                         "z": float(m.group(4)),
                     }
                 )
-            except ValueError:
-                pass
         i += 1
     return nodes, i
 
@@ -236,14 +235,22 @@ def fem_post_process(path: str, *, max_bytes: int = 256 * 1024 * 1024) -> dict[s
 
         if line == "NODE":
             i += 1
+            # FRD convention: the data block starts with a "-1" sentinel
+            # *after* the block name. Skip it before parsing data.
+            if i < len(lines) and lines[i].strip() == "-1":
+                i += 1
             nodes, i = _parse_node_block(lines, i)
             continue
         if line in {"DISP", "DISPL", "DISPR"}:
             i += 1
+            if i < len(lines) and lines[i].strip() == "-1":
+                i += 1
             displacements, i = _parse_displ_block(lines, i)
             continue
         if line == "STRESS":
             i += 1
+            if i < len(lines) and lines[i].strip() == "-1":
+                i += 1
             stresses, i = _parse_stress_block(lines, i)
             continue
         i += 1

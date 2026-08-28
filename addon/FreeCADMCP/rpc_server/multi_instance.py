@@ -97,10 +97,16 @@ class InstanceInfo:
     command: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serialisable snapshot of this instance."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> InstanceInfo:
+        """Rebuild an ``InstanceInfo`` from its dict form.
+
+        Unknown keys are silently dropped so a forward-compatible
+        payload from a newer build still parses on older code.
+        """
         # Tolerate unknown fields (forward-compat).
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in data.items() if k in known})

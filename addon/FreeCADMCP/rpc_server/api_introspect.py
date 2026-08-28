@@ -41,6 +41,13 @@ class ParamInfo:
     annotation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the parameter to a JSON-friendly dict.
+
+        ``inspect.Parameter.empty`` (the sentinel for "no default")
+        is replaced with ``None`` and a separate ``has_default`` flag
+        is set so the JSON consumer can distinguish a missing default
+        from a default of ``None``.
+        """
         out = asdict(self)
         if out["default"] is inspect.Parameter.empty:
             out["default"] = None
@@ -65,6 +72,12 @@ class FunctionInfo:
     return_annotation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the function summary to a JSON-friendly dict.
+
+        Each parameter is itself serialised via ``ParamInfo.to_dict``
+        so the nested list contains plain dicts (not dataclass
+        instances).
+        """
         d = asdict(self)
         d["parameters"] = [p.to_dict() for p in self.parameters]
         return d
@@ -183,6 +196,7 @@ def api_search(
     *,
     modules_filter: Iterable[str] | None = None,
     limit: int = 25,
+    regex_timeout_seconds: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Search public attributes of ``modules`` whose name contains ``query``.
 
@@ -193,13 +207,44 @@ def api_search(
     2. Substring match.
     3. Docstring hit.
 
+    Regex evaluation is bounded by ``regex_timeout_seconds`` (default
+    0.5 s) so a malicious ``query`` like ``/(a+)+$/`` cannot wedge
+    the server with catastrophic backtracking. The pattern is probed
+    once at compile time; if the probe exceeds the budget the pattern
+    is silently dropped and the call falls back to substring search.
+
     Returns a list of ``FunctionInfo.to_dict()`` dicts, capped at
     ``limit`` (default 25).
     """
     pattern: re.Pattern[str] | None = None
     if query.startswith("/") and query.endswith("/") and len(query) >= 3:
         try:
-            pattern = re.compile(query[1:-1], re.IGNORECASE)
+            compiled = re.compile(query[1:-1], re.IGNORECASE)
+            # Probe the regex with a tiny test string under a
+            # signal-based timeout (POSIX only). If the probe hangs
+            # the signal handler raises TimeoutError and we drop the
+            # pattern — falling back to substring search. No-op on
+            # platforms without signal.SIGALRM (Windows).
+            try:
+                import signal as _signal
+
+                def _handler(_signum, _frame):
+                    raise TimeoutError("regex probe timed out")
+
+                prev = _signal.signal(_signal.SIGALRM, _handler)
+                _signal.setitimer(
+                    _signal.ITIMER_REAL,
+                    max(0.01, regex_timeout_seconds),
+                )
+                try:
+                    compiled.search("probe-string")
+                finally:
+                    _signal.setitimer(_signal.ITIMER_REAL, 0)
+                    _signal.signal(_signal.SIGALRM, prev)
+            except (TimeoutError, AttributeError, ValueError):
+                pattern = None
+            else:
+                pattern = compiled
         except re.error:
             pattern = None
     q = query.lower()

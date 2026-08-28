@@ -109,7 +109,7 @@ def _parse_header_section(text: str) -> dict[str, Any]:
     patterns = {
         "name": r"NAME_FIELD\s*\(\s*'([^']*)'\s*\)",
         "author": r"AUTHOR_FIELD\s*\(\s*'([^']*)'\s*\)",
-        "organization": r"ORGANIZATION_FIELD\s*\(\s*'([^']*)'\s*,",
+        "organization": r"ORGANIZATION_FIELD\s*\(\s*'([^']*)'",
         "preprocessor_version": r"PREPROCESSOR_VERSION\s*\(\s*'([^']*)'\s*\)",
         "originating_system": r"ORIGINATING_SYSTEM\s*\(\s*'([^']*)'\s*\)",
         "authorization": r"AUTHORIZATION\s*\(\s*'([^']*)'\s*\)",

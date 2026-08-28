@@ -25,6 +25,7 @@ except Exception:  # pragma: no cover - only hit when run outside FreeCAD
     QtCore = QtGui = QtWidgets = None  # type: ignore[assignment]
 
 from . import rpc_server
+from ._ollama_models import list_ollama_models
 from ._prompt_templates import PromptTemplateRegistry
 
 _PANEL_SINGLETON: MCPControlPanel | None = None
@@ -112,6 +113,7 @@ class MCPControlPanel(QtWidgets.QWidget):
     POLL_INTERVAL_MS = 1000
     PROMPT_HISTORY_ENV = "FREECAD_MCP_OLLAMA_MODEL"
     THEME_ENV = "FREECAD_MCP_PANEL_THEME"
+    OLLAMA_HOST_ENV = "OLLAMA_HOST"
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
@@ -121,6 +123,7 @@ class MCPControlPanel(QtWidgets.QWidget):
         self._process: QtCore.QProcess | None = None
         self._theme = "auto"
         self._template_registry = PromptTemplateRegistry()
+        self._models_loaded = False
         self._build_ui()
         self._wire()
         self._apply_theme(
@@ -134,6 +137,12 @@ class MCPControlPanel(QtWidgets.QWidget):
         self._timer.timeout.connect(self._refresh_status)
         self._timer.start()
         self._refresh_status()
+
+        # Auto-populate the model combobox once on startup so the user
+        # sees installed Ollama models without clicking the refresh button.
+        # We schedule it with a zero-delay timer so the dock is fully
+        # realised before we hit the network.
+        QtCore.QTimer.singleShot(0, self._on_refresh_models)
 
     # ----- UI construction --------------------------------------------------
 
@@ -196,16 +205,34 @@ class MCPControlPanel(QtWidgets.QWidget):
         self.prompt_edit.setFixedHeight(96)
         pc_layout.addWidget(self.prompt_edit)
 
-        # model + working dir row
+        # model + auto-dispatch row (combo + refresh)
         meta_row = QtWidgets.QHBoxLayout()
         meta_row.addWidget(QtWidgets.QLabel("Modelo:"))
-        self.model_edit = QtWidgets.QLineEdit(os.environ.get(self.PROMPT_HISTORY_ENV, "qwen3.6:27b"))
-        meta_row.addWidget(self.model_edit, 1)
+        self.model_combo = QtWidgets.QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        initial_model = os.environ.get(self.PROMPT_HISTORY_ENV, "qwen3.6:27b")
+        self.model_combo.addItem(initial_model)
+        self.model_combo.setCurrentText(initial_model)
+        meta_row.addWidget(self.model_combo, 1)
+        self.refresh_btn = QtWidgets.QPushButton("⟳")
+        self.refresh_btn.setFixedWidth(32)
+        self.refresh_btn.setToolTip("Buscar modelos instalados no Ollama")
+        meta_row.addWidget(self.refresh_btn)
         meta_row.addSpacing(8)
         self.auto_dispatch = QtWidgets.QCheckBox("Auto-dispatch (enviar sem revisar)")
         self.auto_dispatch.setChecked(False)
         meta_row.addWidget(self.auto_dispatch)
         pc_layout.addLayout(meta_row)
+
+        # Ollama host row (optional override)
+        host_row = QtWidgets.QHBoxLayout()
+        host_row.addWidget(QtWidgets.QLabel("Ollama:"))
+        self.ollama_host_edit = QtWidgets.QLineEdit(os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
+        self.ollama_host_edit.setToolTip("URL do servidor Ollama. Vazio usa OLLAMA_HOST do ambiente.")
+        self.ollama_host_edit.setPlaceholderText("http://127.0.0.1:11434")
+        host_row.addWidget(self.ollama_host_edit, 1)
+        pc_layout.addLayout(host_row)
 
         action_row = QtWidgets.QHBoxLayout()
         self.send_btn = QtWidgets.QPushButton("Enviar")
@@ -237,6 +264,8 @@ class MCPControlPanel(QtWidgets.QWidget):
         self.send_btn.clicked.connect(self._on_send)
         self.clear_btn.clicked.connect(self.log_view.clear)
         self.template_combo.currentTextChanged.connect(self._on_template_chosen)
+        self.refresh_btn.clicked.connect(self._on_refresh_models)
+        self.ollama_host_edit.editingFinished.connect(self._on_refresh_models)
 
     # ----- F2: template chooser ------------------------------------------
 
@@ -363,8 +392,12 @@ class MCPControlPanel(QtWidgets.QWidget):
             self._append_log("[mcp] prompt vazio — nada a enviar.\n")
             return
 
-        model = self.model_edit.text().strip() or "qwen3.6:27b"
-        os.environ["OLLAMA_HOST"] = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        model = self.model_combo.currentText().strip() or "qwen3.6:27b"
+        custom_host = self.ollama_host_edit.text().strip()
+        if custom_host:
+            os.environ["OLLAMA_HOST"] = custom_host
+        else:
+            os.environ["OLLAMA_HOST"] = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 
         argv, cwd = self._build_dispatch_argv(prompt, model)
         if argv is None:
@@ -515,6 +548,38 @@ class MCPControlPanel(QtWidgets.QWidget):
     def _on_process_error(self, err: QtCore.QProcess.ProcessError) -> None:
         self._append_log(f"[mcp] QProcess erro: {err}\n")
         self._process = None
+
+    # ----- Ollama model picker ----------------------------------------------
+
+    def _on_refresh_models(self) -> None:
+        """Hit ``/api/tags`` and repopulate the model combobox."""
+        host_text = self.ollama_host_edit.text().strip() or None
+        if host_text:
+            os.environ[self.OLLAMA_HOST_ENV] = host_text
+        try:
+            result = list_ollama_models(host_text, timeout=3.0)
+        except Exception as e:  # pragma: no cover - defensive
+            self._append_log(f"[mcp] erro ao listar modelos: {e}\n")
+            return
+        if not result.ok:
+            self._append_log(f"[mcp] Ollama indisponível: {result.error}\n")
+            return
+        previous = self.model_combo.currentText().strip()
+        self.model_combo.blockSignals(True)
+        try:
+            self.model_combo.clear()
+            for model in result.models:
+                self.model_combo.addItem(model.display(), userData=model.name)
+            if previous:
+                idx = self.model_combo.findData(previous)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setEditText(previous)
+            self._models_loaded = True
+        finally:
+            self.model_combo.blockSignals(False)
+        self._append_log(f"[mcp] {len(result.models)} modelo(s) carregado(s) de {result.url}.\n")
 
     def _append_log(self, text: str) -> None:
         self.log_view.moveCursor(QtGui.QTextCursor.End)

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.4] — 2026-08-28
+
+### Added — Ollama model picker
+
+- **`addon/FreeCADMCP/rpc_server/_ollama_models.py`** — new helper
+  that talks to Ollama's `/api/tags` endpoint over plain
+  `urllib.request` (no extra deps, runs inside the FreeCAD PySide
+  runtime). Exposes `OllamaModelInfo` (name, family, parameter
+  size, quantization level, capabilities, digest) and
+  `list_ollama_models(url=None, timeout=3.0)` returning an
+  `OllamaListResult` with structured error info.
+- **Dock panel model picker** — `QLineEdit` swapped for an
+  editable `QComboBox` populated from `/api/tags` on startup
+  and via a `⟳` refresh button next to the field. Each entry
+  shows `name — family — size — quantization — capabilities` in
+  the dropdown while `userData` keeps the bare model name
+  used in the `--model` flag.
+- **Ollama host field** — new `OLLAMA_HOST` row above the
+  prompt; edit + `editingFinished` triggers a refresh. Empty
+  falls back to the `OLLAMA_HOST` env var, then
+  `http://127.0.0.1:11434`.
+- **Selection preservation** — refresh repopulates the combo
+  but restores the previous selection if it's still installed.
+
+### Added — tests
+
+- `tests/test_ollama_models.py` — 10 tests covering happy
+  path, OLLAMA_HOST env var, TCP unreachable, HTTP 502,
+  malformed JSON, non-list payload, malformed entries, empty
+  host.
+- `tests/test_panel_model_picker.py` — 7 tests covering
+  combo population, previous-selection preservation,
+  "ghost" model fallback, Ollama-down/HTTP-error logging,
+  signals blocking during refresh, env-only host.
+
 ## [1.1.3] — 2026-08-28
 
 ### Fixed

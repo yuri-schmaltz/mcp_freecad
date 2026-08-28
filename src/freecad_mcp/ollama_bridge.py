@@ -75,7 +75,21 @@ def _post_json(url: str, body: dict[str, Any], timeout: float) -> dict[str, Any]
             response = httpx.post(url, json=body, timeout=timeout)
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            _log_ollama_400(url, body, e.response.status_code, e.response.text)
+            # Defensive: read the response body without depending on
+            # .text/.status_code attributes that might raise in
+            # some httpx edge cases.
+            try:
+                status = int(e.response.status_code)
+            except Exception:
+                status = 0
+            try:
+                err_body = e.response.text or ""
+            except Exception:
+                try:
+                    err_body = e.response.content.decode("utf-8", "replace")
+                except Exception:
+                    err_body = f"<unreadable response: {type(e).__name__}>"
+            _log_ollama_400(url, body, status, err_body)
             raise
         return cast(dict[str, Any], response.json())
     data = json.dumps(body).encode("utf-8")
@@ -192,7 +206,29 @@ class OllamaMCPBridge:
                     body["tools"] = tools
 
                 def _do() -> dict[str, Any]:
-                    return _post_json(f"{cfg.ollama_url}/api/chat", body, cfg.request_timeout_s)
+                    try:
+                        return _post_json(f"{cfg.ollama_url}/api/chat", body, cfg.request_timeout_s)
+                    except (httpx.HTTPStatusError, RuntimeError) as exc:
+                        # If Ollama rejects the request *with tools*,
+                        # retry once *without tools* so the user at
+                        # least gets a text answer. This protects
+                        # against mysterious shape mismatches where
+                        # one of the 55 tool specs triggers a 400 we
+                        # haven't diagnosed yet.
+                        if "tools" in body and body["tools"]:
+                            from freecad_mcp._mcp_tool_loop import sanitize_messages_for_llm as _san
+                            logger.warning(
+                                "Ollama 4xx with tools; retrying without tools: %s",
+                                exc,
+                            )
+                            fallback_msgs = cast(list[dict[str, Any]], body.get("messages") or [])
+                            fallback = {
+                                "model": body.get("model", cfg.model),
+                                "stream": False,
+                                "messages": _san(fallback_msgs),
+                            }
+                            return _post_json(f"{cfg.ollama_url}/api/chat", fallback, cfg.request_timeout_s)
+                        raise
 
                 loop.last_reply = cast(dict[str, Any], self.breaker.call(_do))
 

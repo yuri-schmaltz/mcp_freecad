@@ -59,6 +59,17 @@ def _post_json(url: str, body: dict[str, Any], timeout: float) -> dict[str, Any]
     environments — e.g. when launched from the FreeCAD dock panel
     against the system ``python3`` that doesn't have httpx installed.
     """
+    # ALWAYS log the outgoing body so we can debug 4xx/5xx without a debugger.
+    # Best-effort: don't let logging break the actual request.
+    try:
+        import os as _os
+        _os.makedirs("/tmp/freecad-mcp", exist_ok=True)
+        # Use a hash so we don't spam — only write if body changed since last time
+        with open("/tmp/freecad-mcp/last_request_body.json", "w", encoding="utf-8") as f:
+            json.dump(body, f, indent=2, ensure_ascii=False)
+    except Exception:  # pragma: no cover
+        pass
+
     if _HAS_HTTPX and httpx is not None:
         try:
             response = httpx.post(url, json=body, timeout=timeout)
@@ -83,13 +94,16 @@ def _post_json(url: str, body: dict[str, Any], timeout: float) -> dict[str, Any]
     return cast(dict[str, Any], json.loads(payload.decode("utf-8")))
 
 
-def _log_ollama_400(url: str, body: dict[str, Any], status: int, err_body: str) -> None:
+def _log_ollama_400(url: str, body: dict[str, Any], status: int, err_body: str) -> str | None:
     """Dump the failing Ollama request body + response to disk for debugging.
 
     Lives in ``/tmp/freecad-mcp/ollama_400_<ts>.json`` and is best-effort
     — never raises. Used by ``_post_json`` whenever Ollama 4xxs so we
     can diagnose shape mismatches without forcing the user to attach a
     debugger.
+
+    Returns the path of the dump file (or ``None`` on failure) so the
+    caller can surface it to the user.
     """
     try:
         import os as _os
@@ -112,14 +126,30 @@ def _log_ollama_400(url: str, body: dict[str, Any], status: int, err_body: str) 
                 indent=2,
                 ensure_ascii=False,
             )
+        # Print to stderr explicitly so the message reaches the user even
+        # if the host FreeCAD process swallowed the logger's output.
+        import sys as _sys
+        msg = (
+            f"[mcp] Ollama returned {status} for {url} — "
+            f"dumped request body to {path} "
+            f"({len(body.get('messages', []))} msgs, "
+            f"{len(body.get('tools', []))} tools)\n"
+        )
+        try:
+            _sys.stderr.write(msg)
+            _sys.stderr.flush()
+        except Exception:
+            pass
         logger.error(
             "Ollama returned %s for %s — dumped body to %s (%d msgs, %d tools)",
             status, url, path,
             len(body.get("messages", [])),
             len(body.get("tools", [])),
         )
+        return path
     except Exception:  # pragma: no cover — diagnostic only
         logger.exception("failed to dump Ollama 400 body")
+        return None
 
 
 @dataclass

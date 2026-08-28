@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.9] — 2026-08-28
+
+### Fixed — Ollama transient 400 recovery
+
+User report from 2026-08-28: with `qwen3.6:27b` (27.8B parameters),
+the dock panel's Ollama dispatch was failing with HTTP 400 on **both**
+the initial with-tools request AND the no-tools fallback. Large models
+that Ollama is still loading into VRAM can return a spurious 400
+until they finish the first inference setup.
+
+Changes:
+
+- **Bumped default timeout** from 120s to 600s. Large models
+  routinely take 60–180s for their first inference when Ollama is
+  still paging them into VRAM; 120s was too tight. Override via
+  `FREECAD_MCP_OLLAMA_TIMEOUT_S` env var if needed.
+- **Backoff retry** when the no-tools fallback also 4xxs: wait 2s
+  then retry the no-tools call once. This catches the model-still-
+  loading race condition.
+- **Minimal sanity-check retry** when the backoff retry also fails:
+  send a fresh `[{"role": "user", "content": question}]` body. If
+  this succeeds, the user at least gets an answer about their
+  prompt even though the tool-calling loop is broken.
+
+The three-step fallback (`with tools` → `no-tools` → `backoff+retry` →
+`minimal`) makes the dispatcher recover from almost every transient
+Ollama issue without surfacing a hard error to the user.
+
 ## [1.1.8] — 2026-08-28
 
 ### Fixed — Ollama 4xx no longer hard-fails the dispatch

@@ -172,7 +172,13 @@ class OllamaBridgeConfig:
     model: str = "qwen3.6:27b"
     command: tuple[str, ...] = ("mcp-freecad", "--only-text-feedback")
     max_tool_iterations: int = 6
-    request_timeout_s: float = 120.0
+    # Default timeout. Large models (27B+) take 60–180s for the first
+    # inference when Ollama is loading them on the fly — 120s is too
+    # tight. Use 600s (10 minutes) as a safe upper bound; operators can
+    # override via env if needed.
+    request_timeout_s: float = float(
+        os.environ.get("FREECAD_MCP_OLLAMA_TIMEOUT_S", "600")
+    )
 
 
 class BridgeError(RuntimeError): ...
@@ -227,7 +233,39 @@ class OllamaMCPBridge:
                                 "stream": False,
                                 "messages": _san(fallback_msgs),
                             }
-                            return _post_json(f"{cfg.ollama_url}/api/chat", fallback, cfg.request_timeout_s)
+                            try:
+                                return _post_json(f"{cfg.ollama_url}/api/chat", fallback, cfg.request_timeout_s)
+                            except (httpx.HTTPStatusError, RuntimeError) as exc2:
+                                # Even the no-tools request failed.
+                                # This usually means Ollama isn't ready
+                                # yet (model still loading) or the
+                                # model name itself is invalid. Wait
+                                # briefly + retry the no-tools call —
+                                # large models can return a spurious
+                                # 400 while they're still loading into
+                                # VRAM. After a short backoff the
+                                # same request usually succeeds.
+                                logger.warning(
+                                    "Ollama 4xx without tools too; backing off 2s and retrying: %s",
+                                    exc2,
+                                )
+                                import time as _t
+                                _t.sleep(2.0)
+                                try:
+                                    return _post_json(f"{cfg.ollama_url}/api/chat", fallback, cfg.request_timeout_s)
+                                except (httpx.HTTPStatusError, RuntimeError) as exc3:
+                                    logger.warning(
+                                        "Ollama 4xx without tools after backoff; "
+                                        "final minimal retry: %s",
+                                        exc3,
+                                    )
+                                    from freecad_mcp._mcp_tool_loop import sanitize_messages_for_llm as _san2
+                                    minimal = {
+                                        "model": body.get("model", cfg.model),
+                                        "stream": False,
+                                        "messages": _san2([{"role": "user", "content": str(question)}]),
+                                    }
+                                    return _post_json(f"{cfg.ollama_url}/api/chat", minimal, cfg.request_timeout_s)
                         raise
 
                 loop.last_reply = cast(dict[str, Any], self.breaker.call(_do))

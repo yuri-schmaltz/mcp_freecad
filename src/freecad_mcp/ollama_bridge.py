@@ -270,7 +270,39 @@ class OllamaMCPBridge:
 
                 loop.last_reply = cast(dict[str, Any], self.breaker.call(_do))
 
-            init: list[dict[str, Any]] = [{"role": "user", "content": question}]
+            # System prompt nudges tool use: smaller Ollama models
+            # (qwen3.5:9b, gemma4:12b) tend to answer in plain text
+            # instead of emitting ``tool_calls`` unless explicitly told
+            # the tools are how they take action. We keep it short and
+            # explicit so the model doesn't burn iterations producing
+            # "I don't have a tool for that" responses.
+            init: list[dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are driving FreeCAD via MCP tools. "
+                        "Hard rules:\n"
+                        "1. To accomplish anything, you MUST call the tools "
+                        "listed in the ``tools`` array — answering in plain "
+                        "text is never sufficient.\n"
+                        "2. Tool names are case-sensitive and must match "
+                        "exactly. NEVER invent or rename a tool (e.g. do "
+                        "NOT call ``execute_python_code``; the real tool "
+                        "is ``execute_code``). If a tool returns "
+                        "``Unknown tool``, stop and re-read the available "
+                        "names in this turn's ``tools`` array.\n"
+                        "3. Prefer structured tools (``create_document``, "
+                        "``create_object``, ``edit_object``, "
+                        "``save_document``) over ``execute_code`` whenever "
+                        "they cover the task.\n"
+                        "4. After each tool call, read the result, decide "
+                        "the next step, and call again until the task is "
+                        "complete. Reply with a short natural-language "
+                        "summary only after the final tool returns."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
             try:
                 result = await run_tool_loop(
                     session,

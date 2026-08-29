@@ -327,6 +327,130 @@ async def test_ask_tool_failure_is_surfaced_not_raised(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# system prompt: small models need an explicit nudge to call tools
+# ---------------------------------------------------------------------------
+
+
+async def test_ask_includes_system_prompt_nudging_tool_use(monkeypatch):
+    """Regression: smaller Ollama models (qwen3.5:9b, gemma4:12b) tend
+    to answer in plain text instead of emitting ``tool_calls`` unless
+    explicitly told the tools are how they take action. The bridge
+    must prepend a system message that names the expectation.
+    """
+    cfg = ob.OllamaBridgeConfig(max_tool_iterations=2)
+    bridge = ob.OllamaMCPBridge(cfg)
+    http = _FakeHttp(
+        [
+            {"message": {"role": "assistant", "content": "Final answer."}},
+        ]
+    )
+    monkeypatch.setattr(ob.httpx, "post", lambda url, json, timeout: http.post(url, json, timeout))
+    sess = _FakeSession()
+
+    class _Open:
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def _fake_open_mcp():
+        return _Open()
+
+    bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
+    monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
+    out = await bridge.ask("create a box", model="qwen3.5:9b")
+    assert out == "Final answer."
+
+    # Inspect the captured request body.
+    assert http.calls, "bridge never POSTed to /api/chat"
+    body = http.calls[0].read().decode()
+    import json as _json
+    sent = _json.loads(body)
+    msgs = sent["messages"]
+    assert msgs, "no messages in request"
+    first = msgs[0]
+    assert first.get("role") == "system", (
+        f"first message must be a system prompt, got {first.get('role')!r}"
+    )
+    # The nudge must mention tools so small models know to use them.
+    sys_text = first.get("content", "").lower()
+    assert "tool" in sys_text, sys_text
+    assert "mcp" in sys_text or "freecad" in sys_text, sys_text
+    # And the user question still arrives right after.
+    user_msgs = [m for m in msgs if m.get("role") == "user"]
+    assert any(m.get("content") == "create a box" for m in user_msgs)
+
+
+async def test_ask_sanitized_messages_keep_system_prompt(monkeypatch):
+    """sanitize_messages_for_llm must not drop the system message we
+    prepended. Only ``thinking`` and string-form tool_calls.arguments
+    should be touched.
+    """
+    cfg = ob.OllamaBridgeConfig(max_tool_iterations=3)
+    bridge = ob.OllamaMCPBridge(cfg)
+
+    # Two-step loop so we can observe sanitization on iteration 2.
+    http = _FakeHttp(
+        [
+            # iter 1: model wants to call a tool
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "thinking": "I should call create_object",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "create_object",
+                                "arguments": '{"name":"Box","type":"Part::Box"}',  # string form
+                            }
+                        }
+                    ],
+                }
+            },
+            # iter 2: model answers
+            {"message": {"role": "assistant", "content": "Created."}},
+        ]
+    )
+    monkeypatch.setattr(ob.httpx, "post", lambda url, json, timeout: http.post(url, json, timeout))
+    sess = _FakeSession()
+    sess.next_result = types.SimpleNamespace(
+        content=[types.SimpleNamespace(text="ok", data=None)]
+    )
+
+    class _Open:
+        async def __aenter__(self):
+            return (object(), object())
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def _fake_open_mcp():
+        return _Open()
+
+    bridge._open_mcp = _fake_open_mcp  # type: ignore[assignment]
+    monkeypatch.setattr(ob, "ClientSession", lambda r, w: _PatchSessionCM(sess))
+    out = await bridge.ask("build it", model="qwen3.5:9b")
+    assert out == "Created."
+
+    # On iter 2, the request must still carry the original system prompt.
+    assert len(http.calls) == 2
+    import json as _json
+    second = _json.loads(http.calls[1].read().decode())
+    roles = [m.get("role") for m in second["messages"]]
+    assert roles[0] == "system", roles
+    # And the tool_calls arguments were normalized from string → object.
+    tool_msgs = [m for m in second["messages"] if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert tool_msgs
+    args = tool_msgs[0]["tool_calls"][0]["function"]["arguments"]
+    assert isinstance(args, dict), f"arguments must be object, got {type(args)}"
+    assert args.get("name") == "Box"
+    # And ``thinking`` was stripped so Ollama doesn't 400 on it.
+    assert "thinking" not in tool_msgs[0]
+
+
+# ---------------------------------------------------------------------------
 # _post_json httpx vs urllib fallback
 # ---------------------------------------------------------------------------
 

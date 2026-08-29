@@ -1962,13 +1962,54 @@ def stop_rpc_server():
 
 
 def is_rpc_server_running() -> bool:
-    """Return ``True`` when the XML-RPC server thread is alive.
+    """Return ``True`` when the XML-RPC server is actually accepting connections.
 
     Cheap and side-effect free. Used by the dock panel / toolbar
     toggle to colour the indicator and decide whether the next click
     should stop or (re)start the server.
+
+    Why we don't just check ``rpc_server_instance is not None``:
+    the object reference can outlive its socket — e.g. if a previous
+    FreeCAD session shut down without the module's ``stop_rpc_server``
+    being called, or if the underlying socket was closed externally.
+    The dock panel would then report "Running" while every tool call
+    fails with "Failed to connect to FreeCAD", which is the worst
+    possible UX (the user clicks Send, the AI calls a tool, the tool
+    errors, the AI gives up). Instead we probe the actual socket.
     """
-    return rpc_server_instance is not None
+    global rpc_server_instance
+    if rpc_server_instance is None:
+        return False
+    # Cheap liveness check: try to open a TCP connection to the bound
+    # address. If it succeeds the socket is open; we close immediately
+    # (no RPC payload exchanged). Non-blocking, sub-millisecond when
+    # the port is alive.
+    try:
+        addr = getattr(rpc_server_instance, "server_address", None)
+    except Exception:
+        addr = None
+    if not addr or len(addr) < 2:
+        # No usable address → cannot probe; treat as not running and
+        # clear the reference so the next click restarts cleanly.
+        rpc_server_instance = None
+        return False
+    import socket as _socket
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    sock.settimeout(0.25)
+    try:
+        sock.connect((addr[0], addr[1]))
+    except Exception:
+        # Socket dead — clear the stale reference so the next click
+        # on the toolbar restarts cleanly instead of trying to stop
+        # a server that already stopped.
+        with contextlib.suppress(Exception):
+            rpc_server_instance.server_close()  # type: ignore[union-attr]
+        rpc_server_instance = None
+        return False
+    finally:
+        with contextlib.suppress(Exception):
+            sock.close()
+    return True
 
 
 def get_rpc_status() -> dict[str, Any]:

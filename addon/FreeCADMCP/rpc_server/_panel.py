@@ -139,6 +139,13 @@ class MCPControlPanel(QtWidgets.QWidget):
         self._timer.start()
         self._refresh_status()
 
+        # Busy indicator state + animation timer.
+        self._busy = False
+        self._busy_frame = 0
+        self._busy_timer = QtCore.QTimer(self)
+        self._busy_timer.setInterval(350)  # ~3 fps for the dot animation
+        self._busy_timer.timeout.connect(self._tick_busy)
+
         # Auto-populate the model combobox once on startup so the user
         # sees installed Ollama models without clicking the refresh button.
         # We schedule it with a zero-delay timer so the dock is fully
@@ -242,6 +249,15 @@ class MCPControlPanel(QtWidgets.QWidget):
         self.clear_btn.setMinimumHeight(30)
         action_row.addWidget(self.send_btn)
         action_row.addWidget(self.clear_btn)
+        # Busy indicator: spinner + label that animates while the bridge runs.
+        action_row.addSpacing(12)
+        self.busy_label = QtWidgets.QLabel("")
+        self.busy_label.setMinimumWidth(160)
+        self.busy_label.setStyleSheet(
+            "QLabel { color: #f59e0b; font-weight: 600; }"
+        )
+        self.busy_label.hide()
+        action_row.addWidget(self.busy_label)
         action_row.addStretch(1)
         pc_layout.addLayout(action_row)
 
@@ -381,6 +397,57 @@ class MCPControlPanel(QtWidgets.QWidget):
         self._append_log(f"[mcp] {msg}\n")
         self._refresh_status()
 
+    # ----- busy indicator --------------------------------------------------
+
+    # Frames cycle through these strings so the user sees the model is
+    # doing work (dots grow → reset). Keep it short and emoji-free so
+    # it stays readable on dark/light themes and in any font.
+    _BUSY_FRAMES = (
+        "🤔 pensando",
+        "🤔 pensando.",
+        "🤔 pensando..",
+        "🤔 pensando...",
+    )
+    _BTN_BUSY = (
+        "QPushButton { background:#f59e0b; color:#111827; "
+        "border:1px solid #b45309; font-weight:600; }"
+        "QPushButton:disabled { background:#92400e; color:#e5e7eb; }"
+    )
+
+    def _set_busy(self, busy: bool) -> None:
+        """Toggle the 'IA pensando' indicator on/off.
+
+        Disables the send button while a request is in flight, swaps
+        its style to amber, and starts/stops the dot animation timer.
+        Idempotent: calling ``_set_busy(True)`` twice is a no-op.
+        """
+        if busy == self._busy:
+            return
+        self._busy = busy
+        if busy:
+            self._busy_frame = 0
+            self.send_btn.setEnabled(False)
+            self.send_btn.setText("Pensando…")
+            self.send_btn.setStyleSheet(self._BTN_BUSY)
+            self.busy_label.setText(self._BUSY_FRAMES[0])
+            self.busy_label.show()
+            self._busy_timer.start()
+        else:
+            self._busy_timer.stop()
+            self.send_btn.setEnabled(True)
+            self.send_btn.setText("Enviar")
+            # Re-apply theme so the button returns to the themed style.
+            self._apply_theme(self._theme)
+            self.busy_label.hide()
+            self.busy_label.setText("")
+
+    def _tick_busy(self) -> None:
+        """Advance the spinner animation by one frame."""
+        if not self._busy:
+            return
+        self._busy_frame = (self._busy_frame + 1) % len(self._BUSY_FRAMES)
+        self.busy_label.setText(self._BUSY_FRAMES[self._busy_frame])
+
     # ----- prompt dispatch -------------------------------------------------
 
     def _on_send(self) -> None:
@@ -393,7 +460,17 @@ class MCPControlPanel(QtWidgets.QWidget):
             self._append_log("[mcp] prompt vazio — nada a enviar.\n")
             return
 
-        model = self.model_combo.currentText().strip() or "qwen3.6:27b"
+        self._set_busy(True)
+
+        # Combo stores the real model name in userData; currentText() would
+        # return the display string (e.g. "qwen3.6:27b — 27.8B — Q4_K_M — ...")
+        # which Ollama rejects as "invalid model name".
+        model_data = self.model_combo.currentData()
+        model = (model_data or "").strip() if model_data else ""
+        if not model:
+            model = self.model_combo.currentText().strip()
+        if not model:
+            model = "qwen3.6:27b"
         custom_host = self.ollama_host_edit.text().strip()
         if custom_host:
             os.environ["OLLAMA_HOST"] = custom_host
@@ -415,6 +492,7 @@ class MCPControlPanel(QtWidgets.QWidget):
 
         argv, cwd = self._build_dispatch_argv(prompt, model)
         if argv is None:
+            self._set_busy(False)
             return
 
         pretty = " ".join(shlex.quote(a) for a in argv)
@@ -465,6 +543,7 @@ class MCPControlPanel(QtWidgets.QWidget):
             self._append_log(
                 f"[mcp] bridge in-process não disponível: {e!r}\n"
             )
+            self._set_busy(False)
             return
 
         try:
@@ -479,6 +558,7 @@ class MCPControlPanel(QtWidgets.QWidget):
             self._append_log(
                 f"[mcp] falha ao iniciar bridge in-process: {e!r}\n"
             )
+            self._set_busy(False)
 
     def _on_in_process_done(self, answer: str, error: str | None) -> None:
         if error:
@@ -487,6 +567,7 @@ class MCPControlPanel(QtWidgets.QWidget):
             self._append_log(f"\n[mcp] resposta:\n{answer}\n")
         self._process = None
         self._refresh_status()
+        self._set_busy(False)
 
     def _build_dispatch_argv(self, prompt: str, model: str) -> tuple[list[str] | None, str | None]:
         """Return (argv, cwd) ready for ``QProcess.start``.
@@ -654,10 +735,12 @@ class MCPControlPanel(QtWidgets.QWidget):
         self._append_log(f"[mcp] processo terminou (code={code}, status={status}).\n")
         self._process = None
         self._refresh_status()
+        self._set_busy(False)
 
     def _on_process_error(self, err: QtCore.QProcess.ProcessError) -> None:
         self._append_log(f"[mcp] QProcess erro: {err}\n")
         self._process = None
+        self._set_busy(False)
 
     # ----- Ollama model picker ----------------------------------------------
 

@@ -66,6 +66,14 @@ class _FakeComboBox:
     def currentText(self) -> str:  # noqa: N802
         return self._current
 
+    def currentData(self, role: int = 0) -> str:  # noqa: N802
+        # Look up the userData for the currently-selected display.
+        for display, ud in self._items:
+            if display == self._current:
+                return ud
+        # Fallback for setEditText-style scenarios where no item matches.
+        return ""
+
     def blockSignals(self, flag: bool) -> None:  # noqa: N802
         self._signals_blocked = flag
         self.signals_blocked_calls += 1
@@ -78,8 +86,78 @@ class _FakeLineEdit:
     def text(self) -> str:
         return self._text
 
+    def toPlainText(self) -> str:  # QTextEdit compat
+        return self._text
+
     def setText(self, t: str) -> None:
         self._text = t
+
+
+class _FakeBusyLabel:
+    """Tracks text and visibility so the busy indicator can be asserted."""
+
+    def __init__(self) -> None:
+        self._text = ""
+        self._visible = False
+        self.set_text_calls: list[str] = []
+        self.set_style_calls: list[str] = []
+        self.show_calls = 0
+        self.hide_calls = 0
+
+    def setText(self, t: str) -> None:  # noqa: N802
+        self._text = t
+        self.set_text_calls.append(t)
+
+    def text(self) -> str:
+        return self._text
+
+    def setStyleSheet(self, s: str) -> None:  # noqa: N802
+        self.set_style_calls.append(s)
+
+    def show(self) -> None:
+        self._visible = True
+        self.show_calls += 1
+
+    def hide(self) -> None:
+        self._visible = False
+        self.hide_calls += 1
+
+    def isVisible(self) -> bool:  # noqa: N802
+        return self._visible
+
+
+class _FakeBusyButton:
+    """Tracks enable/disable and text/style transitions for the send button."""
+
+    def __init__(self) -> None:
+        self._enabled = True
+        self._text = "Enviar"
+        self._style = ""
+        self.set_enabled_calls: list[bool] = []
+        self.set_text_calls: list[str] = []
+        self.set_style_calls: list[str] = []
+        self.set_min_height_calls = 0
+
+    def setEnabled(self, flag: bool) -> None:  # noqa: N802
+        self._enabled = flag
+        self.set_enabled_calls.append(flag)
+
+    def isEnabled(self) -> bool:  # noqa: N802
+        return self._enabled
+
+    def setText(self, t: str) -> None:  # noqa: N802
+        self._text = t
+        self.set_text_calls.append(t)
+
+    def text(self) -> str:
+        return self._text
+
+    def setStyleSheet(self, s: str) -> None:  # noqa: N802
+        self._style = s
+        self.set_style_calls.append(s)
+
+    def setMinimumHeight(self, _h: int) -> None:  # noqa: N802
+        self.set_min_height_calls += 1
 
 
 def _install_qt_stub() -> None:
@@ -114,10 +192,10 @@ def _install_qt_stub() -> None:
             return lambda *a, **k: None
 
     mod_ps_wid.QFrame = _NoOp
-    mod_ps_wid.QLabel = _NoOp
+    mod_ps_wid.QLabel = _FakeBusyLabel
     mod_ps_wid.QPlainTextEdit = _NoOp
     mod_ps_wid.QComboBox = _FakeComboBox
-    mod_ps_wid.QPushButton = _NoOp
+    mod_ps_wid.QPushButton = _FakeBusyButton
     mod_ps_wid.QVBoxLayout = _NoOp
     mod_ps_wid.QHBoxLayout = _NoOp
     mod_ps_wid.QSizePolicy = _NoOp
@@ -398,6 +476,271 @@ class RefreshModelsTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"OLLAMA_HOST": srv.url}, clear=False):
                 panel._on_refresh_models()
             self.assertEqual([ud for _d, ud in panel.model_combo.added_items], ["m:env"])
+
+
+class SendPromptModelSelectionTests(unittest.TestCase):
+    """Regression: ``_on_send`` must pass the *model name* (userData),
+    not the display string. Sending the display string made Ollama
+    reject every request with ``{"error":"invalid model name"}``.
+    """
+
+    def setUp(self) -> None:
+        _save_qt_modules()
+        _install_qt_stub()
+        self.panel_mod = _get_panel_mod()
+        self.MCPControlPanel = self.panel_mod.MCPControlPanel
+
+    def tearDown(self) -> None:
+        _restore_qt_modules()
+
+    def _install_panel_attrs(self, panel: object) -> None:
+        """Add the attributes ``_on_send`` reads before our test target."""
+        # `_process is not None and state() != NotRunning` check.
+        panel._process = None
+        # Logs go to devnull.
+        panel._append_log = lambda msg: None  # type: ignore[assignment]
+        # Prompt source.
+        if not hasattr(panel, "prompt_edit"):
+            panel.prompt_edit = _FakeLineEdit("hello?")
+        # Provide harmless no-ops for env/QProcess plumbing so the
+        # non-sandbox branch can complete without spinning a real process.
+        panel._build_subprocess_env = lambda argv: None  # type: ignore[assignment]
+        panel._on_process_finished = lambda *a, **kw: None  # type: ignore[assignment]
+        panel._on_process_error = lambda *a, **kw: None  # type: ignore[assignment]
+        # Busy indicator widgets — installed by _build_ui, but tests
+        # bypass __init__, so we wire them up here.
+        panel.send_btn = _FakeBusyButton()
+        panel.busy_label = _FakeBusyLabel()
+        # Animation timer stub: capture start/stop calls.
+        panel._busy = False
+        panel._busy_frame = 0
+        timer_calls: list[str] = []
+
+        class _FakeTimer:
+            def __init__(self) -> None:
+                self._running = False
+
+            def setInterval(self, _ms: int) -> None:  # noqa: N802
+                pass
+
+            def start(self) -> None:
+                self._running = True
+                timer_calls.append("start")
+
+            def stop(self) -> None:
+                self._running = False
+                timer_calls.append("stop")
+
+            def timeout(self) -> None:
+                return None
+
+        panel._busy_timer = _FakeTimer()  # type: ignore[assignment]
+        panel._timer_calls = timer_calls  # type: ignore[attr-defined]
+        # Theme stub (called when busy state clears to restore button style).
+        panel._apply_theme = lambda t: None  # type: ignore[assignment]
+        panel._theme = "auto"
+
+    def _build_panel_with_display_model(self) -> object:
+        """Build a panel-like object whose ``model_combo`` carries one
+        entry whose ``currentText()`` includes a display suffix but whose
+        ``currentData()`` holds the bare model name — exactly like the
+        real combo after ``_on_refresh_models``.
+        """
+        cls = self.MCPControlPanel
+        panel = cls.__new__(cls)
+        panel.model_combo = _FakeComboBox()
+        panel.model_combo.addItem(
+            "qwen3.6:27b — 27.8B — Q4_K_M — vision,completion,tools,thinking",
+            userData="qwen3.6:27b",
+        )
+        panel.ollama_host_edit = _FakeLineEdit("")
+        panel.prompt_edit = _FakeLineEdit("hello?")
+        self._install_panel_attrs(panel)
+        # Pretend we're not sandboxed so we hit the dispatch path.
+        panel._is_sandboxed = lambda: False  # type: ignore[assignment]
+        return panel
+
+    def test_on_send_uses_model_name_not_display(self) -> None:
+        """Regression for 'invalid model name' 400 from Ollama."""
+        panel = self._build_panel_with_display_model()
+        self._install_panel_attrs(panel)
+        captured: dict[str, object] = {}
+
+        def fake_dispatch(self, prompt: str, model: str):
+            captured["prompt"] = prompt
+            captured["model"] = model
+            return (["echo"], None)
+
+        with mock.patch.object(
+            self.MCPControlPanel,
+            "_build_dispatch_argv",
+            autospec=True,
+            side_effect=fake_dispatch,
+        ), mock.patch(
+            "FreeCADMCP.rpc_server._panel.QtCore.QProcess", autospec=False
+        ), mock.patch.dict(
+            os.environ, {}, clear=False
+        ):
+            panel._on_send()
+
+        self.assertEqual(captured.get("model"), "qwen3.6:27b")
+        self.assertNotIn("—", captured.get("model", ""))
+
+    def test_on_send_falls_back_to_default_when_combo_empty(self) -> None:
+        """Empty combo (no userData, no text) → default model."""
+        cls = self.MCPControlPanel
+        panel = cls.__new__(cls)
+        panel.model_combo = _FakeComboBox()
+        # No items added — currentText() == "" and currentData() == "".
+        panel.ollama_host_edit = _FakeLineEdit("")
+        panel.prompt_edit = _FakeLineEdit("hi")
+        self._install_panel_attrs(panel)
+        panel._is_sandboxed = lambda: False  # type: ignore[assignment]
+
+        captured: dict[str, object] = {}
+
+        def fake_dispatch(self, prompt: str, model: str):
+            captured["model"] = model
+            return (["echo"], None)
+
+        with mock.patch.object(
+            self.MCPControlPanel,
+            "_build_dispatch_argv",
+            autospec=True,
+            side_effect=fake_dispatch,
+        ), mock.patch(
+            "FreeCADMCP.rpc_server._panel.QtCore.QProcess", autospec=False
+        ):
+            panel._on_send()
+
+        self.assertEqual(captured.get("model"), "qwen3.6:27b")
+
+    def test_on_send_uses_userdata_when_in_sandbox(self) -> None:
+        """When sandboxed, ``_start_in_process(prompt, model)`` must get
+        the bare name, not the display.
+        """
+        panel = self._build_panel_with_display_model()
+        self._install_panel_attrs(panel)
+        panel._is_sandboxed = lambda: True  # type: ignore[assignment]
+
+        captured: dict[str, object] = {}
+
+        def fake_start_in_process(self, prompt: str, model: str):
+            captured["prompt"] = prompt
+            captured["model"] = model
+
+        with mock.patch.object(
+            self.MCPControlPanel,
+            "_start_in_process",
+            autospec=True,
+            side_effect=fake_start_in_process,
+        ):
+            panel._on_send()
+
+        self.assertEqual(captured.get("model"), "qwen3.6:27b")
+
+
+class BusyIndicatorTests(unittest.TestCase):
+    """The send button must surface 'IA pensando' feedback while a query
+    is in flight (disabling input, animating a spinner, restoring on done).
+    """
+
+    def setUp(self) -> None:
+        _save_qt_modules()
+        _install_qt_stub()
+        self.panel_mod = _get_panel_mod()
+        self.MCPControlPanel = self.panel_mod.MCPControlPanel
+
+    def tearDown(self) -> None:
+        _restore_qt_modules()
+
+    def _make_panel(self) -> tuple[object, _FakeBusyButton, _FakeBusyLabel]:
+        cls = self.MCPControlPanel
+        panel = cls.__new__(cls)
+        send_btn = _FakeBusyButton()
+        busy_label = _FakeBusyLabel()
+        panel.send_btn = send_btn
+        panel.busy_label = busy_label
+        panel._busy = False
+        panel._busy_frame = 0
+
+        # Animation timer stub.
+        class _FakeTimer:
+            def __init__(self) -> None:
+                self.running = False
+
+            def setInterval(self, _ms: int) -> None:  # noqa: N802
+                pass
+
+            def start(self) -> None:
+                self.running = True
+
+            def stop(self) -> None:
+                self.running = False
+
+        panel._busy_timer = _FakeTimer()  # type: ignore[assignment]
+        panel._apply_theme = lambda t: None  # type: ignore[assignment]
+        panel._theme = "auto"
+        return panel, send_btn, busy_label
+
+    def test_set_busy_true_shows_label_and_disables_button(self) -> None:
+        panel, send_btn, busy_label = self._make_panel()
+        panel._set_busy(True)
+        self.assertTrue(busy_label.isVisible())
+        self.assertIn("pensando", busy_label.text())
+        self.assertFalse(send_btn.isEnabled())
+        self.assertEqual(send_btn.text(), "Pensando…")
+        self.assertTrue(panel._busy_timer.running)
+        self.assertTrue(panel._busy)
+
+    def test_set_busy_false_restores_button(self) -> None:
+        panel, send_btn, busy_label = self._make_panel()
+        panel._set_busy(True)
+        panel._set_busy(False)
+        self.assertFalse(busy_label.isVisible())
+        self.assertTrue(send_btn.isEnabled())
+        self.assertEqual(send_btn.text(), "Enviar")
+        self.assertFalse(panel._busy_timer.running)
+        self.assertFalse(panel._busy)
+
+    def test_set_busy_is_idempotent(self) -> None:
+        panel, send_btn, busy_label = self._make_panel()
+        panel._set_busy(True)
+        # Second True call must not re-arm (no extra setText calls, no
+        # extra style changes), so the animation does not jitter.
+        text_calls_before = len(busy_label.set_text_calls)
+        panel._set_busy(True)
+        self.assertEqual(len(busy_label.set_text_calls), text_calls_before)
+        self.assertEqual(send_btn.set_enabled_calls.count(False), 1)
+
+    def test_tick_busy_advances_spinner_frames(self) -> None:
+        panel, _, busy_label = self._make_panel()
+        panel._set_busy(True)
+        first_text = busy_label.text()
+        panel._tick_busy()
+        second_text = busy_label.text()
+        self.assertNotEqual(first_text, second_text)
+        # After 4 ticks we should be back at frame 0.
+        for _ in range(3):
+            panel._tick_busy()
+        self.assertEqual(busy_label.text(), first_text)
+
+    def test_tick_busy_noop_when_not_busy(self) -> None:
+        panel, _, _ = self._make_panel()
+        # Not busy → tick must be a no-op (no AttributeError, no state change).
+        panel._tick_busy()
+        self.assertFalse(panel._busy)
+
+    def test_set_busy_restores_themed_button_style(self) -> None:
+        """The busy state overrides the button style; on clear we must
+        reapply the current theme so the button doesn't stay amber.
+        """
+        panel, send_btn, _ = self._make_panel()
+        applied: list[str] = []
+        panel._apply_theme = lambda t: applied.append(t)  # type: ignore[assignment]
+        panel._set_busy(True)
+        panel._set_busy(False)
+        self.assertEqual(applied, [panel._theme])
 
 
 if __name__ == "__main__":

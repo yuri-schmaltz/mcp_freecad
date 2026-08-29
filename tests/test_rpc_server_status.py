@@ -162,6 +162,16 @@ class _FakeServer:
         self.shutdown_called = 0
         self.server_close_called = 0
         self._release = threading.Event()
+        # Open a real listening socket so is_rpc_server_running's
+        # liveness probe can succeed when the fake is the active
+        # server. The kernel assigns a free port when addr[1] == 0.
+        import socket as _socket
+        self._socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        self._socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        self._socket.bind(addr)
+        self._socket.listen(1)
+        # Re-read the bound address in case the test asked for port 0.
+        self.server_address = self._socket.getsockname()
         _FakeServer.instances.append(self)
 
     def register_instance(self, instance):
@@ -174,9 +184,17 @@ class _FakeServer:
     def shutdown(self):
         self.shutdown_called += 1
         self._release.set()
+        # Close socket here too so stop_rpc_server() actually frees the
+        # port — otherwise the next start_rpc_server hits EADDRINUSE.
+        import contextlib
+        with contextlib.suppress(Exception):
+            self._socket.close()
 
     def server_close(self):
         self.server_close_called += 1
+        import contextlib
+        with contextlib.suppress(Exception):
+            self._socket.close()
 
 
 rpc_server.FilteredXMLRPCServer = _FakeServer
@@ -185,6 +203,12 @@ rpc_server.FilteredXMLRPCServer = _FakeServer
 def _reset():
     rpc_server.rpc_server_instance = None
     rpc_server.rpc_server_thread = None
+    # Close any sockets that fake servers may still be holding so
+    # we don't leak ports between tests.
+    import contextlib
+    for inst in list(_FakeServer.instances):
+        with contextlib.suppress(Exception):
+            inst._socket.close()
     _FakeServer.instances.clear()
     # Force settings back to a known baseline.
     from _rs_pkg_status._settings import save_settings
@@ -208,12 +232,81 @@ def test_is_rpc_server_running_returns_false_when_no_instance():
     assert rpc_server.is_rpc_server_running() is False
 
 
-def test_is_rpc_server_running_returns_true_when_instance_set():
+def test_is_rpc_server_running_returns_false_when_socket_dead():
+    """Regression: the previous implementation only checked that the
+    module-level ``rpc_server_instance`` reference was set. After a
+    previous FreeCAD session shut down without the stop helper being
+    called, the reference stayed alive but the socket was closed — so
+    every tool call failed with "Failed to connect to FreeCAD" while
+    the dock panel reported "Running". The liveness probe must now
+    detect that and return False (clearing the stale reference so the
+    next click restarts cleanly).
+    """
+    _reset()
+    # Allocate + close a port so the kernel definitely has nothing
+    # listening on it. Then point rpc_server_instance at a fake server
+    # bound to that same port — ``is_rpc_server_running`` must refuse
+    # it because its socket is closed.
+    import socket as _socket
+    holder = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    port = holder.getsockname()[1]
+    holder.close()
+    server = _FakeServer(("127.0.0.1", port))
+    # The fake opened a new socket on the same port (after the kernel
+    # freed it). Close it to simulate "socket dead".
+    server._socket.close()
+    rpc_server.rpc_server_instance = server
+    try:
+        assert rpc_server.is_rpc_server_running() is False
+        # The stale reference should have been cleared.
+        assert rpc_server.rpc_server_instance is None
+        # And the fake server's ``server_close`` should have been called
+        # once (the liveness probe tries to clean up before giving up).
+        assert server.server_close_called == 1
+    finally:
+        rpc_server.rpc_server_instance = None
+
+
+def test_is_rpc_server_running_returns_true_when_instance_alive():
+    """When the underlying socket is open, liveness passes."""
+    _reset()
+    server = _FakeServer(("127.0.0.1", 0))  # kernel picks a free port
+    rpc_server.rpc_server_instance = server
+    try:
+        assert rpc_server.is_rpc_server_running() is True
+        # Reference is preserved when alive.
+        assert rpc_server.rpc_server_instance is server
+        assert server.server_close_called == 0
+    finally:
+        rpc_server.rpc_server_instance = None
+        server._socket.close()
+
+
+def test_is_rpc_server_running_returns_false_when_no_server_address():
+    """If the instance has no usable server_address, we treat it as
+    not running (cannot probe a port we don't know)."""
+    _reset()
+
+    class _NoAddr:
+        server_address = None
+
+    rpc_server.rpc_server_instance = _NoAddr()
+    try:
+        assert rpc_server.is_rpc_server_running() is False
+    finally:
+        rpc_server.rpc_server_instance = None
+
+
+def test_is_rpc_server_running_returns_false_when_instance_set():
+    """Deprecated: kept as a sanity check that a bare object() sentinel
+    no longer fools the helper (it lacks server_address, so it is
+    treated as not running)."""
     _reset()
     sentinel = object()
     rpc_server.rpc_server_instance = sentinel
     try:
-        assert rpc_server.is_rpc_server_running() is True
+        assert rpc_server.is_rpc_server_running() is False
     finally:
         rpc_server.rpc_server_instance = None
 
@@ -277,7 +370,11 @@ def test_get_rpc_status_reflects_remote_enabled_from_settings():
 
 
 def test_get_rpc_status_swallows_malformed_server_address():
-    """If server_address raises, status should still return valid keys."""
+    """If server_address raises, ``is_rpc_server_running`` should treat
+    it as not running (cannot probe a port we don't know how to read).
+    ``get_rpc_status`` then surfaces ``running=False`` and leaves the
+    host/port fields empty rather than crashing.
+    """
     _reset()
 
     class Weird:
@@ -288,9 +385,11 @@ def test_get_rpc_status_swallows_malformed_server_address():
     rpc_server.rpc_server_instance = Weird()
     try:
         st = rpc_server.get_rpc_status()
-        assert st["running"] is True
+        assert st["running"] is False
         assert st["host"] is None
         assert st["port"] is None
+        # The stale reference should have been cleared by the probe.
+        assert rpc_server.rpc_server_instance is None
     finally:
         rpc_server.rpc_server_instance = None
 

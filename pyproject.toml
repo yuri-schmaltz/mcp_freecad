@@ -1,6 +1,6 @@
 [project]
 name = "mcp-freecad"
-version = "1.1.9"
+version = "2.0.0"
 description = "MCP server that lets LLMs drive FreeCAD via XML-RPC: create/edit CAD objects, run CalculiX FEM analyses, capture screenshots, and manage the parts library."
 readme = "README.md"
 authors = [

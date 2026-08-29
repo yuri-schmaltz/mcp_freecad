@@ -5,6 +5,128 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/yuri-schmaltz/mcp_freecad/compare/v1.0.3...v2.0.0) (2026-08-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* The project is now an independent package under yuri-schmaltz/mcp-freecad. Users must migrate:
+
+### Features
+
+* add auto-start option for RPC server ([c1548b5](https://github.com/yuri-schmaltz/mcp_freecad/commit/c1548b56ddbab8942ce069d25f097c491a013c16))
+* add auto-start option for RPC server on FreeCAD launch ([82c23d7](https://github.com/yuri-schmaltz/mcp_freecad/commit/82c23d79c7af2a9a3fe51303fa9d4033439cced1))
+* add IP address and host validation for remote connections ([5dbd3b2](https://github.com/yuri-schmaltz/mcp_freecad/commit/5dbd3b20116055d5b55c6b7853f3d92f565e2781))
+* add remote connection support for MCP and RPC servers ([cb824f1](https://github.com/yuri-schmaltz/mcp_freecad/commit/cb824f16b20c77fb879994ccca37817c0f653d3e))
+* **addon:** use checkable menu item for remote connections toggle ([0cac21b](https://github.com/yuri-schmaltz/mcp_freecad/commit/0cac21b9519e0ba6600f30f6f3ead00b9ed6b4f3))
+* **api:** Fase 5 — undo/redo, save_document, export_object, get_active_view, health_check ([a35836f](https://github.com/yuri-schmaltz/mcp_freecad/commit/a35836fc6dbbd102dc1f57d7f2cc6ffc38f31cd7))
+* **bridge:** dump every outgoing Ollama body to last_request_body.json ([fbae2ce](https://github.com/yuri-schmaltz/mcp_freecad/commit/fbae2ce93108993ffc4245716a6c5b30930b5dd0))
+* **bridge:** dump failing Ollama request body to /tmp/freecad-mcp on 4xx ([2420609](https://github.com/yuri-schmaltz/mcp_freecad/commit/2420609e6a0a20c9b660a0b953ff403db207c980))
+* **bridge:** retry Ollama without tools on 400; harden diagnostic against None response ([4c6070c](https://github.com/yuri-schmaltz/mcp_freecad/commit/4c6070cf4bedfdfb9545c683fe08190b8e764074))
+* commit v0.4.0 source modifications (Tier 1/2) ([a7f30b4](https://github.com/yuri-schmaltz/mcp_freecad/commit/a7f30b49066ed574e1ef9bcecbb8907c0bfad3ac))
+* Create multi-instance management for FreeCAD ([d9f1c4e](https://github.com/yuri-schmaltz/mcp_freecad/commit/d9f1c4e8fea10270bf476fcf8d36e58c487dc8f4))
+* cut oficial v1.0.0 — independent project as mcp-freecad ([d5b9d63](https://github.com/yuri-schmaltz/mcp_freecad/commit/d5b9d63620718bc46739ced0ce1b4ea71718e6bc))
+* **dx:** Fase 3 — consistency and developer experience ([6456f84](https://github.com/yuri-schmaltz/mcp_freecad/commit/6456f8408fe6f5589848a7eda4130344ce06ff19))
+* **gauntlet:** Flatpak docs + headless _flush_gui_events + Ollama bridge ([8cad9fc](https://github.com/yuri-schmaltz/mcp_freecad/commit/8cad9fc66254c1790b6b32e54e7db370f5357a09))
+* Implement async job runner for long-running FreeCAD operations ([d9f1c4e](https://github.com/yuri-schmaltz/mcp_freecad/commit/d9f1c4e8fea10270bf476fcf8d36e58c487dc8f4))
+* **panel:** auto-populate Ollama model combobox from /api/tags ([791a16e](https://github.com/yuri-schmaltz/mcp_freecad/commit/791a16e60f2b1a83c12d9004070a02fca1195f05))
+* release v1.1.0 with new features, tools, and improvements ([b5ecae3](https://github.com/yuri-schmaltz/mcp_freecad/commit/b5ecae34deeb34ef8299c41849ba126e8131aad9))
+* **rpc:** per-operation timeouts with env-var overrides ([89d5a37](https://github.com/yuri-schmaltz/mcp_freecad/commit/89d5a3778e91b8e485c42bd2b4fcdacc1e20e7b0))
+* **rpc:** per-request idempotency and cooperative cancellation ([178e9d5](https://github.com/yuri-schmaltz/mcp_freecad/commit/178e9d517a3a3d4ec5e53abe53bbe27a423e9d2a))
+* **security:** Fase 5 follow-up — TLS, bearer-token auth, screenshot formats, payload compression ([33b555a](https://github.com/yuri-schmaltz/mcp_freecad/commit/33b555a067fc37ec7120bd7b99274892c89cdafb))
+* **security:** T1.5 non-loopback bind gate ([608299f](https://github.com/yuri-schmaltz/mcp_freecad/commit/608299f9d0b8e0087c1fd6cb4d6b2fa02f976680))
+* **ui:** add busy indicator and improve model selection handling in MCPControlPanel ([9f8d132](https://github.com/yuri-schmaltz/mcp_freecad/commit/9f8d1324ce74b7a05a21851a26ab7fc265450fdb))
+
+
+### Bug Fixes
+
+* 51 ([5a64353](https://github.com/yuri-schmaltz/mcp_freecad/commit/5a64353eb39ddbacddf6dcdbf8ce399602112455))
+* **addon:** simplify remote connections toggle to not require IP dialog ([418e2a7](https://github.com/yuri-schmaltz/mcp_freecad/commit/418e2a70f96439259449e0dd1e56f904d04b419f))
+* **addon:** use static menu text for remote connections toggle ([b29fb11](https://github.com/yuri-schmaltz/mcp_freecad/commit/b29fb118a3e0287c63c97fa52d665d21f7ad3b3a))
+* **bridge:** sanitize Ollama messages to fix 400 Bad Request on tool-call loop (v1.1.7) ([acd1420](https://github.com/yuri-schmaltz/mcp_freecad/commit/acd1420ac0a75da7032cd146b0b4c368f305218a))
+* **bridge:** three-step Ollama 4xx fallback for large-model transient failures (v1.1.9) ([dce41fa](https://github.com/yuri-schmaltz/mcp_freecad/commit/dce41fa1b3fcb4f1ec59231b558af1471cf2cc3c))
+* **bridge:** urllib fallback for ollama_bridge when httpx absent ([f8d40e4](https://github.com/yuri-schmaltz/mcp_freecad/commit/f8d40e4d946e1db19be924dfe600a0d514cfd833))
+* **ci:** repair commitlint config and mypy no-any-return ([f321edf](https://github.com/yuri-schmaltz/mcp_freecad/commit/f321edf67e833535aa78272bcbb2ba31909cd98c))
+* **client:** enforce timeout on FreeCAD XML-RPC calls ([6d22319](https://github.com/yuri-schmaltz/mcp_freecad/commit/6d223194a3efa874e460da60c9aac823d4fe108e))
+* **deps:** cap mcp&lt;2 to prevent mcp 2.x install breakage ([ec64d68](https://github.com/yuri-schmaltz/mcp_freecad/commit/ec64d680484dcaa70cd4ef23d23ad5e02d97c8da))
+* **execute_code:** isolate stdout buffer per request ([dc596d6](https://github.com/yuri-schmaltz/mcp_freecad/commit/dc596d6aa70bb0ca0a0276815a575e71ff53498b))
+* **fem:** clean up solver scratch directory after each run ([902d1a6](https://github.com/yuri-schmaltz/mcp_freecad/commit/902d1a6de812b43df9a235fc244311137305b74c))
+* **logging:** make configure_logging idempotent ([eaafae3](https://github.com/yuri-schmaltz/mcp_freecad/commit/eaafae3dd56ffb5d42e510b050a8f2594ad041f9))
+* **operations:** apply [@safe](https://github.com/safe)_operation to create_document and get_view ([38140da](https://github.com/yuri-schmaltz/mcp_freecad/commit/38140da76dd7e1a2c192f7bd208d362ce855c4b0))
+* **panel:** in-process Ollama bridge for Flatpak sandbox (v1.1.6) ([02c88f4](https://github.com/yuri-schmaltz/mcp_freecad/commit/02c88f48cae5e65b1e718cf8278605be3532c26b))
+* **panel:** robust ollama_bridge dispatch resolver ([5549d49](https://github.com/yuri-schmaltz/mcp_freecad/commit/5549d49d14c1f462800c257b237b61979e55ac1e))
+* **parts-library:** cache parts list with mtime-based invalidation ([8c9f138](https://github.com/yuri-schmaltz/mcp_freecad/commit/8c9f138e4c8c84bb97e631cc0f3d2e79754141f9))
+* preserve traceback in langchain react example ([c0dd4ed](https://github.com/yuri-schmaltz/mcp_freecad/commit/c0dd4ed0672fb461bd5d4b723f635e85f69e08bb))
+* preserve traceback in langchain react example ([321c871](https://github.com/yuri-schmaltz/mcp_freecad/commit/321c871f26c7bb3a2e3ecceb4a59e03804184762))
+* **rpc:** collapse get_active_screenshot into a single GUI task ([2827a06](https://github.com/yuri-schmaltz/mcp_freecad/commit/2827a062c09f81f4bea13454adb83d425a502866))
+* **rpc:** guarantee process_gui_tasks reschedules on any error ([e57e638](https://github.com/yuri-schmaltz/mcp_freecad/commit/e57e638021f3ac06d5b754fa521bc459c8aa8f5a))
+* **rpc:** make start_rpc_server / stop_rpc_server thread-safe ([5ffc9b8](https://github.com/yuri-schmaltz/mcp_freecad/commit/5ffc9b87c33fdf294b95a904609a938fc21b7d73))
+* **security:** close path traversal in parts_library.insert_part_from_library ([9aadd02](https://github.com/yuri-schmaltz/mcp_freecad/commit/9aadd0206a849b7c2704674e208b7f57465c41fb))
+* **security:** refuse 0.0.0.0/0 and ::/0 in validate_allowed_ips ([2de60b0](https://github.com/yuri-schmaltz/mcp_freecad/commit/2de60b062cccdc8f6215821770c37f633403c85b))
+* **security:** rewrite check_prompt_conflict with regex; scope by field type ([6b4b085](https://github.com/yuri-schmaltz/mcp_freecad/commit/6b4b0858a62f2eb02407faebdaed7b707d3170cf))
+* **settings:** fallback chain when FreeCAD user dir is read-only ([b71a00a](https://github.com/yuri-schmaltz/mcp_freecad/commit/b71a00a4e3011b9a7060b07555b32c8153fd1008))
+
+
+### Refactoring
+
+* **rpc:** decompose rpc_server.py (1699→1305 lines) ([75b3458](https://github.com/yuri-schmaltz/mcp_freecad/commit/75b3458d1fcb9e0ab07c4af8946451fe80452817))
+* **rpc:** make T3.1 decomposition actually pure code movement ([1d2ddfd](https://github.com/yuri-schmaltz/mcp_freecad/commit/1d2ddfd3342026b52a95316e445c8923e852bc0a))
+* **tests:** use monkeypatching for FreeCAD stubs to ensure test isolation ([b969aa6](https://github.com/yuri-schmaltz/mcp_freecad/commit/b969aa6817655aad3ab023174710730f1d51b773))
+
+
+### Documentation
+
+* add Arch/CachyOS install instructions ([847a2ce](https://github.com/yuri-schmaltz/mcp_freecad/commit/847a2ce666b6511972bb056c0e7e7a3c49f512cc))
+* add Arch/CachyOS install instructions ([e7f0e77](https://github.com/yuri-schmaltz/mcp_freecad/commit/e7f0e774371c4332f0aff428aae948de62bf3171))
+* add Auto-Start RPC Server section to README ([72b9967](https://github.com/yuri-schmaltz/mcp_freecad/commit/72b99677624a4fc90cf30fa335001f81556c313f))
+* add IMPROVEMENT_PLAN and .gitignore ([75785c1](https://github.com/yuri-schmaltz/mcp_freecad/commit/75785c11361c9f49273e84b22c8d2ba1c85cf591))
+* bump to 0.3.0, update CHANGELOG and SECURITY ([b679e1c](https://github.com/yuri-schmaltz/mcp_freecad/commit/b679e1c523af0ce976e466c68f9c589accd370a3))
+* commit v0.4.0 doc updates (CHANGELOG, README, SECURITY) ([dd2cc78](https://github.com/yuri-schmaltz/mcp_freecad/commit/dd2cc780e723d21eeaa730fe410f9b965f54a506))
+* fix FreeCAD Mod Directory on macOS ([53cbfe7](https://github.com/yuri-schmaltz/mcp_freecad/commit/53cbfe7e07f5da6c5743cf89b1ededaa1563ab5f))
+* fix FreeCAD Mod Directory on macOS ([a1fef38](https://github.com/yuri-schmaltz/mcp_freecad/commit/a1fef38202dae378bdba112a51be3755d211fb09))
+* mark Fase 1 as complete in IMPROVEMENT_PLAN ([77ff52e](https://github.com/yuri-schmaltz/mcp_freecad/commit/77ff52e1281c3d6896dbde2ba01a49c8e24e03a5))
+* mark Fase 2 as complete in IMPROVEMENT_PLAN ([0e6418a](https://github.com/yuri-schmaltz/mcp_freecad/commit/0e6418ae0c90a3e18dc4a3e80a24e22dafe95179))
+* **release:** Fase 6 — CHANGELOG, CONTRIBUTING, SECURITY, README, version bump ([cc5200a](https://github.com/yuri-schmaltz/mcp_freecad/commit/cc5200a11b13508a966d44f32c345fa10abc27c2))
+* update IMPROVEMENT_PLAN with Fase 1 + Fase 2 progress ([df2fc9d](https://github.com/yuri-schmaltz/mcp_freecad/commit/df2fc9d533111664b8a5bb02bfef15dc816156ee))
+* update README badges — 612 tests, 87% coverage ([9fc6604](https://github.com/yuri-schmaltz/mcp_freecad/commit/9fc66049596c109e70084d54129487e9de46ebec))
+* updated start rpc server image to have remote connections ([5576d60](https://github.com/yuri-schmaltz/mcp_freecad/commit/5576d60b951f5a3e7d4847e24b29c8ef92ba348b))
+
+
+### Tests
+
+* add hypothesis property-based fuzzing (T3.2) ([2f06648](https://github.com/yuri-schmaltz/mcp_freecad/commit/2f0664804fd8d77374e8b8e1bd45f54279597bd6))
+* Add integration tests for api_introspect module ([d9f1c4e](https://github.com/yuri-schmaltz/mcp_freecad/commit/d9f1c4e8fea10270bf476fcf8d36e58c487dc8f4))
+* Add tests for multi_instance module ([d9f1c4e](https://github.com/yuri-schmaltz/mcp_freecad/commit/d9f1c4e8fea10270bf476fcf8d36e58c487dc8f4))
+* add unit tests for guidelines, responses, utils ([f1bade2](https://github.com/yuri-schmaltz/mcp_freecad/commit/f1bade2eb1071382fc720b4f6dead17fc618c48e))
+* bump coverage to 77% (515 passing) with new test files for rpc_server ([aff136d](https://github.com/yuri-schmaltz/mcp_freecad/commit/aff136de3217fef8be22403aeb32d3419359f7e2))
+* **ci:** add pytest harness and aggregate runner ([4f3d84a](https://github.com/yuri-schmaltz/mcp_freecad/commit/4f3d84aa69376c910564104debd87b41367b34ac))
+* **ci:** Fase 4 — pytest harness, coverage, ruff, mypy ([2db763c](https://github.com/yuri-schmaltz/mcp_freecad/commit/2db763cbdba629d2ec3064af7b926bbfd917e191))
+* commit modified test files (Tier 1/2 v0.4.0 additions) ([76dd18a](https://github.com/yuri-schmaltz/mcp_freecad/commit/76dd18a5e28bd51085080094124aeb877add1cc2))
+* commit v0.4.0 source + test files (Tier 1/2 completion) ([1f09af6](https://github.com/yuri-schmaltz/mcp_freecad/commit/1f09af67b39da6ac078455e27a082183d9d8891b))
+* coverage push 79% (522 passing, Pillow installed) ([398e011](https://github.com/yuri-schmaltz/mcp_freecad/commit/398e011395425d7c5118a1ff18bcfebe82fa1d32))
+* coverage push 80% (540 passing) ([9bc696c](https://github.com/yuri-schmaltz/mcp_freecad/commit/9bc696c46ac6b55ac3a3e7748f65e56d0da4a061))
+* coverage push 81% (546 passing) ([a5ae07d](https://github.com/yuri-schmaltz/mcp_freecad/commit/a5ae07da3fff709fdbbac905d616077536b24bb1))
+* coverage push 82% (552 passing) ([5383afd](https://github.com/yuri-schmaltz/mcp_freecad/commit/5383afd4e9b77d96205f0f0243b41be9a84525a9))
+* coverage push 83% (555 passing) ([190169d](https://github.com/yuri-schmaltz/mcp_freecad/commit/190169dcbce045c0c30d7d9afb108bcfc438d47c))
+* coverage push 84% (564 passing) ([4a0774d](https://github.com/yuri-schmaltz/mcp_freecad/commit/4a0774d5d9e661c6534a0e1ad7738c06c7224a0b))
+* coverage push 87% (612 passing) — over 85% target ([8fbc536](https://github.com/yuri-schmaltz/mcp_freecad/commit/8fbc5362e2fa5f77c732857d2ed791b5203cbf9d))
+* skip POSIX-only tests on Windows + relax connect-refused bound ([8858e91](https://github.com/yuri-schmaltz/mcp_freecad/commit/8858e910bd01e003675c6c54847bf17ed4232755))
+
+
+### Build System
+
+* bump version to 1.1.2 ([f385b6a](https://github.com/yuri-schmaltz/mcp_freecad/commit/f385b6a07643bcf2b2788717fd7bdf0502d29da6))
+* bump version to 1.1.3 (ollama dispatch fix) ([c32dfdf](https://github.com/yuri-schmaltz/mcp_freecad/commit/c32dfdf5979920b7889942bc3c6c55569f06e270))
+* bump version to 1.1.8 ([4ed4f7d](https://github.com/yuri-schmaltz/mcp_freecad/commit/4ed4f7d9c156dcedfa76e211ceafc08e20bd39cf))
+* **ci:** add packages wrapper to release-please v17 config ([4e51d8c](https://github.com/yuri-schmaltz/mcp_freecad/commit/4e51d8c255d2daeab9133ba5d1c84b002bb0f4af))
+* **ci:** release-please + commitlint (T3.4) ([735dc41](https://github.com/yuri-schmaltz/mcp_freecad/commit/735dc4131168dd6b0e5df1de9fbad640c3d380b1))
+* **ci:** set include-v-in-tag: true to match repo tag convention ([ab78c3c](https://github.com/yuri-schmaltz/mcp_freecad/commit/ab78c3c56ba150c99abd6e0efb6bd8c8ae4382e7))
+
+
+### Continuous Integration
+
+* matrix OS \u00d7 Python, FreeCAD addon syntax gate (T3.3) ([5deb21e](https://github.com/yuri-schmaltz/mcp_freecad/commit/5deb21ed525458eea2d580145b3b9360cda0cb65))
+
 ## [Unreleased]
 
 ## [1.1.9] — 2026-08-28
